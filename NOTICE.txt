@@ -1,0 +1,20 @@
+wechat2dot includes code and tests derived from:
+  cd233ljx/wechat-dot-bridge
+  https://github.com/cd233ljx/wechat-dot-bridge
+  Revision: 67c726e15ae2de8b60d293d6f5e81107bd0b6ebc
+  Copyright (c) 2026 cd233
+  License: MIT, preserved in licenses/upstream-bridge-MIT.txt
+
+The wechat_dot_bridge package, original tests and legacy installation/upgrade
+helpers retain their upstream structure. New wechat2dot package, onboarding,
+demo, documentation, packaging and CI are contributions to this derivative.
+Upstream real-world validation is not validation of this derivative deployment.
+
+The original bridge incorporates Tencent/openclaw-weixin protocol and media
+work and silk-wasm support. Their MIT notices are preserved under licenses/.
+The original technical audit is retained in docs/upstream/AUDIT.md as provenance.
+Some links there describe upstream history rather than this repository.
+
+OpenAI tunnel-client is a separate user-supplied official binary and is not
+bundled here. wechat2dot is an independent community project, not an official
+OpenAI or Tencent product.

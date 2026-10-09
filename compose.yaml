@@ -1,0 +1,21 @@
+services:
+  gateway:
+    build: .
+    image: wechat2dot:local
+    init: true
+    user: "10001:10001"
+    restart: unless-stopped
+    entrypoint: ["/tunnel/tunnel-client"]
+    command: ["run", "--profile-file", "/data/tunnel.yaml"]
+    volumes:
+      - runtime:/data
+      - ./tunnel:/tunnel:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 15s
+
+volumes:
+  runtime:
