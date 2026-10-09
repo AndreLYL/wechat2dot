@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
 import unittest
@@ -72,6 +73,13 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(main(["demo", "--preview"]), 0)
         self.assertEqual(json.loads(output.getvalue())["mode"], "protocol_preview")
 
+    def test_command_help_reaches_onboarding_options_without_creating_files(self):
+        with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit) as caught:
+            main(["init", "--help"])
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn("--directory", output.getvalue())
+        self.assertIn("--tunnel-id", output.getvalue())
+
     @unittest.skipUnless(os.name == "posix", "POSIX symlink test")
     def test_symlink_destination_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -117,7 +125,15 @@ class OnboardingTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux"), "Linux engine fixture")
     def test_demo_runs_production_engine_without_network(self):
         from wechat2dot.demo import run_demo
-        with patch("socket.socket", side_effect=AssertionError("Network forbidden in demo")):
+        actual_socket = socket.socket
+
+        class LocalSocketOnly(actual_socket):
+            def __init__(self, family=socket.AF_INET, *args, **kwargs):
+                if family != socket.AF_UNIX:
+                    raise AssertionError("Internet socket forbidden in demo")
+                super().__init__(family, *args, **kwargs)
+
+        with patch("socket.socket", LocalSocketOnly), patch("socket.getaddrinfo", side_effect=AssertionError("DNS forbidden in demo")):
             result = run_demo()
         self.assertEqual(result["engine_e2e"], "passed")
         self.assertEqual(len(result["simulated_wechat"]), 3)

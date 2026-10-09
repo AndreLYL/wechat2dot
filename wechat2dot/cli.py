@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 
 from . import __version__
@@ -15,11 +16,19 @@ ENGINE_COMMANDS = {"serve", "status", "diagnose", "pause", "resume", "subscripti
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="wechat2dot", description="Use WeChat to reach your existing dot.")
+    parser = argparse.ArgumentParser(prog="wechat2dot", description="Use WeChat to reach your existing dot.", add_help=False)
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", default=os.environ.get("WECHAT2DOT_CONFIG"))
     parser.add_argument("command", choices=["init", "doctor", "demo", "save-key", "allow-callback", "login", *sorted(ENGINE_COMMANDS)])
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv or argv[0] in {"--help", "-h"}:
+        parser.print_help()
+        print("Use COMMAND --help for command-specific arguments. Live operations require Linux and --config.")
+        return 0
     args, remaining = parser.parse_known_args(argv)
+    if args.command in {"doctor", "login"} and remaining in (["--help"], ["-h"]):
+        print("doctor: offline checks only; login: interactive private WeChat QR binding. Use --config PATH before the command.")
+        return 0
     try:
         if args.command in ENGINE_COMMANDS:
             if not sys.platform.startswith("linux"):
@@ -63,7 +72,7 @@ def main(argv=None):
             with warnings.catch_warnings():
                 warnings.simplefilter("error", getpass.GetPassWarning)
                 key = getpass.getpass("Tunnel runtime key (hidden): ")
-            if not 20 <= len(key) <= 1024 or any(c.isspace() for c in key):
+            if not re.fullmatch(r"sk-[A-Za-z0-9_-]{20,512}", key):
                 raise ValueError("invalid_key")
             new_file(root / "tunnel-runtime-key", key)
             result = {"key_saved": True, "key_printed": False}

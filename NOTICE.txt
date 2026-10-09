@@ -12,6 +12,10 @@ Upstream real-world validation is not validation of this derivative deployment.
 
 The original bridge incorporates Tencent/openclaw-weixin protocol and media
 work and silk-wasm support. Their MIT notices are preserved under licenses/.
+Tencent reference revision: 24de5c9eb0dd5e595d7e2d090ed8a3f82870d42c;
+the Markdown filter is copied from that reference. The optional audio helper
+uses silk-wasm 3.7.1. Runtime dependencies are installed separately with their
+distribution notices; FFmpeg is optional and is not bundled in this repository.
 The original technical audit is retained in docs/upstream/AUDIT.md as provenance.
 Some links there describe upstream history rather than this repository.
 
