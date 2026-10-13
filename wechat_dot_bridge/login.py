@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 from contextlib import contextmanager
-import fcntl
 import json
 import math
 import os
@@ -23,6 +22,7 @@ import uuid
 from .errors import BridgeError
 from .net_transport import NetworkFailure, request
 from .store import Store
+from wechat2dot.platform import safe_open, check_private_fd, lock_exclusive, sync_directory
 from .transport import (
     DEFAULT_BASE_URL, MAX_RESPONSE_BYTES, _pinned_address, _binding,
     _endpoint, _json_object, _resolve_public,
@@ -37,20 +37,20 @@ _TERMINAL = frozenset({"confirmed", "expired", "verify_code_blocked", "already_b
 
 
 def _private_file(fd):
-    metadata = os.fstat(fd)
-    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1):
-        raise BridgeError("unsafe_login_file")
+    try:
+        check_private_fd(fd)
+    except ValueError:
+        raise BridgeError("unsafe_login_file") from None
 
 
 @contextmanager
 def _login_lock(directory: Path):
     fd = None
     try:
-        fd = os.open(directory / ".weixin-login.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = safe_open(directory / ".weixin-login.lock", os.O_RDWR | os.O_CREAT, 0o600)
         _private_file(fd)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive(fd)
         except BlockingIOError:
             raise BridgeError("login_busy") from None
         yield
@@ -66,7 +66,7 @@ def _login_lock(directory: Path):
 def _read_state(directory: Path) -> dict | None:
     fd = None
     try:
-        fd = os.open(directory / LOGIN_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = safe_open(directory / LOGIN_FILE, os.O_RDONLY)
         _private_file(fd)
         with os.fdopen(fd, "rb") as source:
             fd = None
@@ -98,7 +98,7 @@ def _write_state(directory: Path, data: dict):
         # Refuse an existing unsafe destination instead of following/replacing it.
         existing = None
         try:
-            existing = os.open(directory / LOGIN_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+            existing = safe_open(directory / LOGIN_FILE, os.O_RDONLY)
             _private_file(existing)
         except FileNotFoundError:
             pass
@@ -108,18 +108,14 @@ def _write_state(directory: Path, data: dict):
         raw = json.dumps(data, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         if len(raw) > MAX_LOGIN_BYTES:
             raise BridgeError("invalid_login_state")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = safe_open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as destination:
             fd = None
             destination.write(raw)
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(temporary, directory / LOGIN_FILE)
-        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        sync_directory(directory)
     except BridgeError:
         raise
     except (OSError, UnicodeError, ValueError, TypeError):

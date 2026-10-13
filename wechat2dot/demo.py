@@ -1,10 +1,11 @@
-"""Offline demonstration: real Linux engine, synthetic WeChat and dot boundaries."""
+"""Offline demonstration: native engine, synthetic WeChat and dot boundaries."""
 
 import base64
 import hashlib
 import hmac
 import json
 import tempfile
+from pathlib import Path
 
 
 def _check(condition, detail="Demo invariant failed"):
@@ -20,7 +21,7 @@ def preview():
             "tools": [tool["name"] for tool in tool_definitions()],
             "flow": ["WeChat -> durable inbox", "signed event -> existing dot",
                      "read -> interim reply -> final reply", "durable outbox -> WeChat"],
-            "next": "Run wechat2dot demo on Linux or in Docker to exercise the engine."}
+            "next": "Run wechat2dot demo to exercise the native engine."}
 
 
 def run_demo():
@@ -62,7 +63,8 @@ def run_demo():
         return 200, b"{}"
 
     with tempfile.TemporaryDirectory(prefix="wechat2dot-demo-") as directory:
-        store = Store(directory, clock=clock)
+        state = Path(directory) / "state"
+        store = Store(state, clock=clock)
         try:
             store.import_binding({"id": account, "owner": owner, "token": "synthetic-token",
                                   "base_url": "https://ilinkai.weixin.qq.com", "cursor": "demo-initial"})
@@ -105,7 +107,7 @@ def run_demo():
             _check(len(callbacks) == 1 and len(sent) == 2)
             _check(all(post["msg"]["to_user_id"] == owner for post in sent))
             store.close()
-            store = Store(directory, clock=clock)
+            store = Store(state, clock=clock)
             store.recover_inflight()
             _check(not WeixinWorker(store, client).send_once())
             _check(len(sent) == 2)

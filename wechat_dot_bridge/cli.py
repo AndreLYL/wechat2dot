@@ -1,7 +1,6 @@
 """Local operator commands and bounded stdio runtime."""
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -19,6 +18,7 @@ from .events import Events
 from .mcp import MCPServer
 from .typing import TypingIndicator
 from .media import MediaWorker
+from wechat2dot.platform import private_directory as native_directory, safe_open, check_private_fd, lock_exclusive
 
 MAX_RPC_BYTES = 2 * 1024 * 1024
 
@@ -34,24 +34,27 @@ def private_directory(path):
             raise BridgeError("unsafe_path")
     if path in {Path.home(), Path.cwd(), Path("/"), Path("/srv/data"), Path("/srv/stacks")}:
         raise BridgeError("unsafe_path")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.stat().st_uid != os.getuid():
-        raise BridgeError("unsafe_owner")
-    if not path.is_dir() or stat.S_IMODE(path.stat().st_mode) != 0o700:
-        raise BridgeError("unsafe_permissions")
+    try:
+        native_directory(path)
+    except ValueError as error:
+        raise BridgeError(str(error) if str(error) in {"unsafe_owner", "unsafe_permissions"} else "unsafe_path") from None
     return path
 
 
 def acquire_lock(path):
     path = Path(path)
     private_directory(path.parent)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    fd = safe_open(path, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         metadata = os.fstat(fd)
-        if metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or not stat.S_ISREG(metadata.st_mode):
+        if metadata.st_nlink != 1 or not stat.S_ISREG(metadata.st_mode):
             raise BridgeError("unsafe_owner")
-        os.fchmod(fd, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.name != "nt":
+            if metadata.st_uid != os.getuid():
+                raise BridgeError("unsafe_owner")
+            os.fchmod(fd, 0o600)
+        check_private_fd(fd)
+        lock_exclusive(fd)
         return os.fdopen(fd, "r+")
     except BaseException:
         os.close(fd)
@@ -204,7 +207,8 @@ async def _run_runtime(store, server, weixin, events, media, monitor, typing):
                         tasks.cancel_scope.cancel()
                         break
 
-            tasks.start_soon(signals)
+            if os.name != "nt":
+                tasks.start_soon(signals)
             for name, function in (("poll", weixin.poll_once), ("send", weixin.send_once),
                                    ("event", events.deliver_once), ("media", media.tick),
                                    ("monitor", monitor.tick), ("typing", presence)):

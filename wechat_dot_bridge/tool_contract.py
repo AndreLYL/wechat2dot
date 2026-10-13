@@ -4,7 +4,9 @@ import re
 
 PROTOCOL = "2026-07-28"
 COMPATIBLE_VERSIONS = {PROTOCOL, "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
-SERVER_INFO = {"name": "wechat2dot", "version": "0.1.0a1"}
+from wechat2dot import __version__
+
+SERVER_INFO = {"name": "wechat2dot", "version": __version__}
 MESSAGE_ID_SCHEMA = {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"}
 
 

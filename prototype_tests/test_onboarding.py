@@ -63,10 +63,10 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(len(result["tools"]), 11)
         self.assertFalse(result["real_dot_connected"])
 
-    def test_windows_refuses_live_engine_before_importing_it(self):
+    def test_live_engine_requires_config_on_every_platform(self):
         with patch.object(sys, "platform", "win32"), contextlib.redirect_stderr(io.StringIO()) as error:
             self.assertEqual(main(["serve"]), 2)
-        self.assertIn("live_runtime_requires_linux_or_docker", error.getvalue())
+        self.assertIn("config_required", error.getvalue())
 
     def test_cli_preview_is_parseable_json(self):
         with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -90,7 +90,6 @@ class OnboardingTests(unittest.TestCase):
                 prepare(root / "link" / "runtime")
             self.assertFalse((root / "target" / "runtime").exists())
 
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux engine fixture")
     def test_namespaced_tunnel_profile_preserves_id_and_key_reference(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -105,7 +104,6 @@ class OnboardingTests(unittest.TestCase):
             self.assertIn("-m wechat2dot", profile)
             self.assertFalse((root / "runtime" / "tunnel-runtime-key").exists())
 
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux configuration lock")
     def test_callback_approval_requires_stopped_worker_and_never_claims_subscription(self):
         from wechat2dot.onboarding import approve_callback
         from wechat_dot_bridge.cli import acquire_lock
@@ -122,16 +120,20 @@ class OnboardingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     approve_callback(config, host)
 
-    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux engine fixture")
     def test_demo_runs_production_engine_without_network(self):
         from wechat2dot.demo import run_demo
         actual_socket = socket.socket
 
         class LocalSocketOnly(actual_socket):
-            def __init__(self, family=socket.AF_INET, *args, **kwargs):
-                if family != socket.AF_UNIX:
-                    raise AssertionError("Internet socket forbidden in demo")
-                super().__init__(family, *args, **kwargs)
+            def connect(self, address):
+                if isinstance(address, tuple) and address[0] not in {"127.0.0.1", "::1"}:
+                    raise AssertionError("Internet connection forbidden in demo")
+                return super().connect(address)
+
+            def connect_ex(self, address):
+                if isinstance(address, tuple) and address[0] not in {"127.0.0.1", "::1"}:
+                    raise AssertionError("Internet connection forbidden in demo")
+                return super().connect_ex(address)
 
         with patch("socket.socket", LocalSocketOnly), patch("socket.getaddrinfo", side_effect=AssertionError("DNS forbidden in demo")):
             result = run_demo()

@@ -4,6 +4,7 @@ import os
 import sqlite3
 from pathlib import Path
 from .errors import BridgeError
+from wechat2dot.platform import safe_open, check_private_path, reject_links
 
 
 def subscriptions(store):
@@ -53,7 +54,7 @@ def backup(store, destination):
         if item.is_symlink():
             raise BridgeError('unsafe_path')
     _private_directory(path.parent)
-    fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+    fd=safe_open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
     created = os.fstat(fd)
     os.close(fd)
     try:
@@ -125,16 +126,17 @@ def restore(source,directory):
     source=Path(source).absolute()
     for item in (source,*source.parents):
         if item.is_symlink(): raise BridgeError('unsafe_path')
-    info=source.stat()
-    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_mode&0o077:
-        raise BridgeError('unsafe_backup')
+    try:
+        check_private_path(source)
+    except (ValueError, OSError):
+        raise BridgeError('unsafe_backup') from None
     target=Path(directory)/'bridge.sqlite3'
     with closing(sqlite3.connect(source.as_uri()+'?mode=ro',uri=True)) as original:
         if original.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
             raise BridgeError('backup_invalid')
         tables={r[0] for r in original.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {'messages','replies','binding'} <= tables: raise BridgeError('backup_invalid')
-        fd=os.open(target,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
+        fd=safe_open(target,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
         with closing(sqlite3.connect(target)) as recovered, recovered:
             original.backup(recovered)
             recovered.execute('UPDATE binding SET enabled=0')

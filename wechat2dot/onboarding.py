@@ -8,36 +8,26 @@ import re
 import shlex
 import stat
 import sys
+from .platform import (reject_links, private_directory as native_directory, safe_open,
+                       check_private_path, sync_directory)
 
-DEPENDENCIES = ("mcp", "anyio", "cryptography", "Pillow", "jsonschema", "httpcore", "standardwebhooks")
+DEPENDENCIES = ("mcp", "anyio", "cryptography", "Pillow", "jsonschema", "httpcore", "standardwebhooks", "portalocker")
 
 
 def check_path(path):
-    path = Path(os.path.abspath(path))
-    for component in (path, *path.parents):
-        if component.is_symlink():
-            raise ValueError("symlink_not_allowed")
-    return path
+    return reject_links(path)
 
 
 def private_directory(path):
     path = check_path(path)
     if path == Path(path.anchor) or path == Path.home() or path == Path.cwd():
         raise ValueError("dedicated_directory_required")
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not path.is_dir():
-        raise ValueError("directory_required")
-    if os.name == "posix":
-        info = path.stat()
-        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
-            raise ValueError("private_directory_required")
-    return path
+    return native_directory(path)
 
 
 def new_file(path, value):
     path = check_path(path)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
+    descriptor = safe_open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as destination:
             destination.write(value)
@@ -54,8 +44,6 @@ def prepare(directory, tunnel_id=None, tunnel_client=None):
         raise ValueError("invalid_tunnel_id")
     if (tunnel_id is None) != (tunnel_client is None):
         raise ValueError("tunnel_id_and_client_required_together")
-    if tunnel_client and not sys.platform.startswith("linux"):
-        raise ValueError("live_setup_requires_linux")
     root = check_path(directory)
     config = root / "bridge.json"
     profile = root / "tunnel.yaml"
@@ -73,8 +61,9 @@ def prepare(directory, tunnel_id=None, tunnel_client=None):
                                     "callback_hosts": []}, indent=2) + "\n")
         created.append(config)
         if client:
-            if os.name != "posix":
-                raise ValueError("live_setup_requires_linux")
+            # Official tunnel-client parses the string into argv itself; this
+            # is not a cmd.exe / PowerShell command. Single-quote Windows paths
+            # so its shellword parser preserves backslashes and spaces.
             command = shlex.join([sys.executable, "-m", "wechat2dot", "--config", str(config), "serve"])
             text = ("config_version: 1\ncontrol_plane:\n  base_url: \"https://api.openai.com\"\n"
                     "  tunnel_id: " + json.dumps(tunnel_id) + "\n"
@@ -111,8 +100,9 @@ def approve_callback(config_path, host):
     state, hosts, *_ = load_config(args)
     with acquire_lock(state / "worker.lock"):
         path = check_path(config_path)
-        if path.stat().st_size > 16384 or path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
+        if path.stat().st_size > 16384:
             raise ValueError("unsafe_config")
+        check_private_path(path)
         value = json.loads(path.read_text(encoding="utf-8"))
         if host not in hosts:
             hosts.append(host)
@@ -122,6 +112,7 @@ def approve_callback(config_path, host):
         temporary = path.with_name(path.name + ".pending")
         new_file(temporary, json.dumps(value, indent=2) + "\n")
         os.replace(temporary, path)
+        sync_directory(path.parent)
     return {"callback_configured": True, "subscription_verified": False, "restart_required": True}
 
 
@@ -146,27 +137,24 @@ def diagnose(config_path=None):
                 raise ValueError("invalid_config")
             config_status = "present"
             callback_status = "configured_unverified" if value["callback_hosts"] else "unconfigured"
-            if os.name == "posix":
-                info = path.stat()
-                directories = [path.parent, check_path(value["state_dir"])]
-                if isinstance(value.get("lock_dir"), str):
-                    directories.append(check_path(value["lock_dir"]))
-                private = (info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600
-                           and all(item.is_dir() and item.stat().st_uid == os.getuid()
-                                   and stat.S_IMODE(item.stat().st_mode) == 0o700 for item in directories))
-                private_status = "posix_permissions_ok" if private else "unsafe_permissions"
-            else:
-                private_status = "not_verified"
+            try:
+                check_private_path(path)
+                for directory in [path.parent, value["state_dir"], value.get("lock_dir", path.parent / "locks")]:
+                    check_private_path(directory, directory=True)
+                private_status = "windows_acl_ok" if os.name == "nt" else "posix_permissions_ok"
+            except (ValueError, OSError):
+                private_status = "unsafe_permissions"
         except (OSError, ValueError):
             config_status = "invalid"
     return {
         "project": "wechat2dot", "mode": "offline_diagnostic", "network_requests": 0,
         "environment": {"python_supported": sys.version_info >= (3, 11),
-                        "live_runtime_supported": sys.platform.startswith("linux"),
+                        "live_runtime_supported": sys.platform.startswith("linux") or sys.platform in {"win32", "darwin"},
+                        "storage_security": "windows_acl" if os.name == "nt" else "posix_permissions",
                         "missing_dependencies": missing},
         "layers": {"configuration": config_status, "private_storage": private_status,
                    "wechat_binding": "not_verified", "mcp_tools": "not_verified",
                    "callback": callback_status, "dot_events": "not_verified",
                    "visible_wechat_reply": "not_verified"},
         "live_ready": False,
-        "next": "Follow docs/CONNECT_DOT.md; use Docker or a Linux host for the live engine."}
+        "next": "Follow docs/CONNECT_DOT.md on Windows, Linux or macOS."}

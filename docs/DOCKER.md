@@ -1,6 +1,6 @@
-# Docker：在 Windows / macOS 运行 Linux 核心
+# Docker：可选容器部署
 
-需要已安装 Docker Engine / Docker Desktop 并启用 Linux 容器。项目不自动安装 Docker，不开放宿主机端口。
+Windows、Linux、macOS 都可以原生运行，见 [接入指南](CONNECT_DOT.md)。需要隔离部署时可选择 Docker Engine / Docker Desktop 的 Linux 容器。项目不自动安装 Docker，不开放宿主机端口。
 
 ## 离线演示
 

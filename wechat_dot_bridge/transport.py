@@ -557,7 +557,8 @@ def _read_import_file(path: Path) -> bytes:
             metadata = component.lstat()
             if stat.S_ISLNK(metadata.st_mode):
                 raise BridgeError("binding_invalid")
-        descriptor = os.open(absolute, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        from wechat2dot.platform import safe_open
+        descriptor = safe_open(absolute, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise BridgeError("binding_invalid")
         with os.fdopen(descriptor, "rb") as source:

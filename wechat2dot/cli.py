@@ -16,6 +16,9 @@ ENGINE_COMMANDS = {"serve", "status", "diagnose", "pause", "resume", "subscripti
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="wechat2dot", description="Use WeChat to reach your existing dot.", add_help=False)
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", default=os.environ.get("WECHAT2DOT_CONFIG"))
@@ -23,7 +26,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if not argv or argv[0] in {"--help", "-h"}:
         parser.print_help()
-        print("Use COMMAND --help for command-specific arguments. Live operations require Linux and --config.")
+        print("Use COMMAND --help for command-specific arguments. Live operations require --config.")
         return 0
     args, remaining = parser.parse_known_args(argv)
     if args.command in {"doctor", "login"} and remaining in (["--help"], ["-h"]):
@@ -31,10 +34,11 @@ def main(argv=None):
         return 0
     try:
         if args.command in ENGINE_COMMANDS:
-            if not sys.platform.startswith("linux"):
-                raise ValueError("live_runtime_requires_linux_or_docker")
             if not args.config and "--help" not in remaining:
                 raise ValueError("config_required")
+            if args.config and "--help" not in remaining:
+                from .platform import check_private_path
+                check_private_path(args.config)
             from wechat_dot_bridge.cli import main as engine
             prefix = ["--config", args.config] if args.config else []
             return engine([*prefix, args.command, *remaining])
@@ -53,16 +57,14 @@ def main(argv=None):
             result = prepare(values.directory, values.tunnel_id, values.tunnel_client)
         elif args.command == "demo":
             command = argparse.ArgumentParser(prog="wechat2dot demo")
-            command.add_argument("--preview", action="store_true", help="Show protocol structure without running the Linux engine")
+            command.add_argument("--preview", action="store_true", help="Show protocol structure without running the engine")
             values = command.parse_args(remaining)
             from .demo import run_demo, preview
-            result = preview() if values.preview or not sys.platform.startswith("linux") else run_demo()
+            result = preview() if values.preview else run_demo()
         elif args.command == "save-key":
             command = argparse.ArgumentParser(prog="wechat2dot save-key")
             command.add_argument("--directory", default="runtime")
             values = command.parse_args(remaining)
-            if not sys.platform.startswith("linux"):
-                raise ValueError("live_setup_requires_linux_or_docker")
             import getpass
             import warnings
             from .onboarding import private_directory, new_file
@@ -77,8 +79,8 @@ def main(argv=None):
             new_file(root / "tunnel-runtime-key", key)
             result = {"key_saved": True, "key_printed": False}
         elif args.command == "allow-callback":
-            if not args.config or not sys.platform.startswith("linux"):
-                raise ValueError("linux_and_config_required")
+            if not args.config:
+                raise ValueError("config_required")
             command = argparse.ArgumentParser(prog="wechat2dot allow-callback")
             command.add_argument("hostname")
             values = command.parse_args(remaining)
@@ -87,8 +89,8 @@ def main(argv=None):
         else:
             if remaining:
                 parser.error("login does not accept extra arguments; use login-poll --verification-code if requested")
-            if not args.config or not sys.platform.startswith("linux"):
-                raise ValueError("linux_and_config_required")
+            if not args.config:
+                raise ValueError("config_required")
             result = _login(args.config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

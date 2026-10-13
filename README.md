@@ -5,9 +5,11 @@
 [![CI](https://github.com/AndreLYL/wechat2dot/actions/workflows/ci.yml/badge.svg)](https://github.com/AndreLYL/wechat2dot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-中文 · [English](docs/README_EN.md) · [连接 DOT](docs/CONNECT_DOT.md) · [能力边界](docs/CAPABILITIES.md) · [路线图](docs/ROADMAP.md)
+**Windows · Linux · macOS 原生运行**
 
-> **Alpha 原型。** 已提供收发引擎、11 个 MCP 工具、事件订阅、安装入口和离线演示。wechat2dot 自己的真人微信 ↔ DOT 验收尚未完成；你的账号还需要具备私人插件、MCP Events 和 Secure MCP Tunnel 权限。
+中文 · [English](docs/README_EN.md) · [连接 DOT](docs/CONNECT_DOT.md) · [能力边界](docs/CAPABILITIES.md) · [架构](docs/ARCHITECTURE.md)
+
+> **Alpha。** 支持三平台原生消息引擎、11 个 MCP 工具、事件订阅、附件与进度回传。真实微信 ↔ DOT 验收尚未完成；账号需要具备私人插件、MCP Events 和 Secure MCP Tunnel 权限。
 
 ```mermaid
 flowchart LR
@@ -31,9 +33,9 @@ uv run wechat2dot doctor
 uv run wechat2dot demo
 ```
 
-Linux 的 `demo` 使用真实消息存储、MCP 工具和事件签名核心，模拟微信及 DOT 的网络边界，检查进度、最终回复、去重与重启恢复。Windows / macOS 默认输出协议预览，明确标注 `engine_e2e: not_run`。两者都不扫码、不联网到微信或 DOT。
+三个系统的 `demo` 都运行实际消息存储、MCP 工具和事件签名引擎，模拟微信及 DOT 的网络边界，检查进度、最终回复、去重与重启恢复。不扫码、不连接真实账号。`demo --preview` 可以只查看协议结构。
 
-已安装 Docker 的 Windows / macOS 用户可以运行 Linux 演示：
+Docker 也是可选部署方式：
 
 ```sh
 docker build -t wechat2dot:local .
@@ -42,7 +44,7 @@ docker run --rm --network none wechat2dot:local demo
 
 ## 接上自己的 DOT
 
-真实服务运行在 Linux 或 Linux 容器中。按 [接入指南](docs/CONNECT_DOT.md)依次核对权限、创建私人配置、扫码绑定、连接 Tunnel、订阅事件、恢复收信，然后完成微信端真人验收。Docker 路径见 [Docker 指南](docs/DOCKER.md)。
+Windows、Linux、macOS 使用相同 CLI 原生运行，不要求安装 Docker 或 WSL。按 [接入指南](docs/CONNECT_DOT.md)依次核对权限、创建私人配置、扫码绑定、连接 Tunnel、订阅事件、恢复收信，再完成微信端真人验收。需要容器部署时见 [Docker 指南](docs/DOCKER.md)。
 
 ## 第一版能做什么
 
@@ -57,8 +59,8 @@ docker run --rm --network none wechat2dot:local demo
 
 群聊、任意主动推送、微信内原生权限审批、电脑接管、完整历史迁移和语音通话暂未实现。生成文件可通过文本 / 分块字节 / 服务可访问的 HTTPS 地址回传；内部 `sandbox:` 路径不能直接导出。详见 [能力矩阵](docs/CAPABILITIES.md)。
 
-## 开源基础与贡献
+## 设计与贡献
 
-收发与 MCP 核心基于 MIT 项目 [cd233ljx/wechat-dot-bridge](https://github.com/cd233ljx/wechat-dot-bridge)，基线为 `67c726e15ae2de8b60d293d6f5e81107bd0b6ebc`。保留 `wechat_dot_bridge` 模块名及原测试以维护兼容性。wechat2dot 新增用户入口、环境诊断、协议 / 引擎演示、容器部署和面向贡献者的验证路线。协议与部分媒体处理来源于 [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin)。完整许可证见 [NOTICE.txt](NOTICE.txt)。
+采用统一任务与消息核心、微信通道、DOT 连接和原生平台适配层。消息与附件落入持久队列，执行权限留在现有 DOT，平台差异集中处理。设计取舍见 [架构说明](docs/ARCHITECTURE.md)。
 
-欢迎提交脱敏安装反馈和可复现修复，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。优先目标是让第一批用户真正接通；5,000 stars 是长期传播目标，进度取决于实际使用体验。我们不会把上游的实测记录当作本项目的实测证明。
+欢迎提交脱敏安装反馈和可复现修复，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。

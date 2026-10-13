@@ -19,6 +19,8 @@ class UpgradeScriptTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         shutil.copytree(ROOT / "wechat_dot_bridge", self.root / "wechat_dot_bridge",
                         ignore=shutil.ignore_patterns("node_modules", "__pycache__"))
+        shutil.copytree(ROOT / "wechat2dot", self.root / "wechat2dot",
+                        ignore=shutil.ignore_patterns("__pycache__"))
         (self.root / "scripts").mkdir()
         shutil.copy2(ROOT / "scripts" / "verify-upgrade.py", self.root / "scripts")
         self.env = dict(os.environ)

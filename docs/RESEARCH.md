@@ -11,7 +11,7 @@ GitHub 已有直接连接现有 DOT 与微信的项目，因此机会在于安�
 | [Pluviobyte/dot2api](https://github.com/Pluviobyte/dot2api) | 事件任务队列、claim / complete，文字 API 入口 | 说明事件桥接路线可复用；不直接等于微信 / 多媒体方案 |
 | [chenhg5/cc-connect](https://github.com/chenhg5/cc-connect) | 多种编码代理 / IM 平台、会话生命周期 | 同类生态；不是现有 OpenAI DOT 的等价替代 |
 
-核心选型固定在 `cd233ljx/wechat-dot-bridge@67c726e15ae2de8b60d293d6f5e81107bd0b6ebc`，保留协议模块与测试，增加项目自己的 onboarding 和验证入口。腾讯协议以 [官方 openclaw-weixin](https://github.com/Tencent/openclaw-weixin) 为依据。
+调研帮助识别协议与产品边界；当前实现设计见 [架构说明](ARCHITECTURE.md)。微信协议以 [官方 openclaw-weixin](https://github.com/Tencent/openclaw-weixin) 为依据。
 
 实现路线：微信 iLink 收信落库；只向已核验的 OpenAI callback 发送消息 ID；现有 DOT 通过私人 Tunnel 使用 MCP 工具读正文、运行已授权任务、提交回复；本地 outbox 持久发送。此架构能承载广泛任务，但不能自动转移 DOT 原生审批、登录、电脑接管或文件内部路径。
 

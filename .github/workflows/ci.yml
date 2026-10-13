@@ -2,12 +2,26 @@ name: CI
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
+env:
+  PYTHONUTF8: '1'
+defaults:
+  run:
+    shell: bash
 jobs:
   engine:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python: ['3.11', '3.14']
+        include:
+          - os: ubuntu-24.04
+            python: '3.11'
+          - os: ubuntu-24.04
+            python: '3.14'
+          - os: windows-latest
+            python: '3.12'
+          - os: macos-latest
+            python: '3.12'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,30 +38,21 @@ jobs:
       - run: uv sync --frozen --all-extras --python '${{ matrix.python }}'
       - run: uv run --frozen ruff check .
       - run: npm ci --ignore-scripts --prefix wechat_dot_bridge/codecs
-      - name: Engine and onboarding behavior
+      - name: Full POSIX regression and upgrade
+        if: runner.os != 'Windows'
         run: |
           export WECHAT_BRIDGE_FFMPEG="$(uv run --frozen python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
           uv run --frozen python -m unittest discover -s tests -v
+          uv run --frozen python scripts/verify-upgrade.py
+      - name: Native runtime and onboarding on every OS
+        run: |
           uv run --frozen python -m unittest discover -s prototype_tests -v
           uv run --frozen wechat2dot demo
-          uv run --frozen python scripts/verify-upgrade.py
       - run: uv run --frozen python scripts/scan_secrets.py
+        if: runner.os != 'Windows'
       - run: uv run --frozen python scripts/check_source.py
       - run: uv run --frozen python -m build --no-isolation
       - run: uv run --frozen python scripts/check_package.py
-  windows-preview:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: '0.12.24'
-      - run: uv sync --frozen --all-extras
-      - run: uv run --frozen python -m unittest discover -s prototype_tests -v
-      - run: uv run --frozen wechat2dot demo --preview
   container:
     runs-on: ubuntu-latest
     steps:

@@ -194,9 +194,11 @@ def managed_backup(store, directory, keep=7):
     previous = []
     for path in directory.glob(pattern):
         info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
-            raise BridgeError("unsafe_backup")
+        from wechat2dot.platform import check_private_path
+        try:
+            check_private_path(path)
+        except (OSError, ValueError):
+            raise BridgeError("unsafe_backup") from None
         previous.append((info.st_mtime_ns, path))
     name = "bridge-backup-" + str(time.time_ns()) + "-" + uuid.uuid4().hex + ".sqlite3"
     destination = directory / name

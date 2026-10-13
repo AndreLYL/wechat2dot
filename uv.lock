@@ -492,6 +492,15 @@ wheels = [
 ]
 
 [[package]]
+name = "portalocker"
+version = "4.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/cd/d2a23fc80c26f539ac77e7d61bd5e4af5d0b3a09a78ac4c716eead345129/portalocker-4.4.0.tar.gz", hash = "sha256:90c0df939d4ffba121f8e925bbf98ecea8b9381718666ab871a226938d2b63b2", size = 304906, upload-time = "2026-09-19T16:11:09.114Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/6c/07fa2775e87b6e241c2aca5cef79f65e450bc115de55f03cda6251f81690/portalocker-4.4.0-py3-none-any.whl", hash = "sha256:a8e99ea29bfb61766ee0b4008cbaf0651e8e050f7a2485ebf54316480e99226e", size = 129647, upload-time = "2026-09-19T16:11:07.377Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -935,7 +944,7 @@ wheels = [
 
 [[package]]
 name = "wechat2dot"
-version = "0.1.0a1"
+version = "0.2.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -944,6 +953,8 @@ dependencies = [
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "pillow" },
+    { name = "portalocker" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "standardwebhooks" },
 ]
 
@@ -968,6 +979,8 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "mcp", specifier = ">=2.3.0,<2.4" },
     { name = "pillow", specifier = ">=12.1.1,<13" },
+    { name = "portalocker", specifier = ">=4.3,<5" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
     { name = "qrcode", marker = "extra == 'setup'", specifier = "==8.2" },
     { name = "standardwebhooks", specifier = ">=1.0.0,<2" },
 ]

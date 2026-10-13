@@ -8,18 +8,22 @@
 
 ## 1. 准备私人运行目录
 
-以下为 Linux shell 命令，在仓库目录执行。Windows Docker 用户见 [Docker 指南](DOCKER.md)。从 [官方 tunnel-client Releases](https://github.com/openai/tunnel-client/releases/latest) 下载适合主机架构的 Linux 二进制，并核验官方校验信息。将二进制绝对路径和控制台返回的 Tunnel ID 替换到下列命令：
+三个系统均原生运行，在仓库目录执行。先从 [官方 tunnel-client Releases](https://github.com/openai/tunnel-client/releases/latest) 下载适合系统与 CPU 架构的二进制，并核验官方校验信息；Windows 使用 `.exe`，Linux / macOS 使用对应原生程序。把绝对路径和控制台返回的 Tunnel ID 替换到命令中。Docker 见 [可选容器部署](DOCKER.md)。
 
 ```sh
 uv sync --frozen --extra setup
-uv run wechat2dot init --directory ./runtime \
-  --tunnel-id YOUR_TUNNEL_ID \
-  --tunnel-client /absolute/path/to/tunnel-client
+uv run wechat2dot init --directory ./runtime --tunnel-id YOUR_TUNNEL_ID --tunnel-client /absolute/path/to/tunnel-client
 uv run wechat2dot save-key --directory ./runtime
 uv run wechat2dot --config ./runtime/bridge.json doctor
 ```
 
-`save-key` 隐藏输入，并以 0600 保存；不要把 key 放在命令参数、聊天或截图中。安装器不覆盖已有配置，不启动服务。运行目录使用 0700；真实状态和凭据不能进 Git。
+Windows PowerShell 的初始化示例：
+
+```powershell
+uv run wechat2dot init --directory ./runtime --tunnel-id YOUR_TUNNEL_ID --tunnel-client 'C:\Tools\tunnel-client.exe'
+```
+
+`save-key` 隐藏输入。Windows 使用本人专有 ACL，Linux/macOS 使用 0700 目录与 0600 文件。安装器不覆盖已有配置，不启动服务；真实状态和凭据不能进 Git。
 
 `doctor` 只做离线诊断。`not_verified` 表示该层未验收，不是已经接通或必然失败。
 
@@ -40,6 +44,8 @@ uv run wechat2dot --config ./runtime/bridge.json login
 ```sh
 /absolute/path/to/tunnel-client run --profile-file ./runtime/tunnel.yaml
 ```
+
+Windows PowerShell 使用 `& 'C:\Tools\tunnel-client.exe' run --profile-file ./runtime/tunnel.yaml`。三个系统都使用安装器生成的配置，路径里的空格会被正确保留。
 
 创建仅本人可访问的开发者插件，连接方式选 Tunnel 并使用真实控制台 identity。此部署为私人 stdio 服务，使用无认证模式并依靠 Tunnel 访问控制；公共插件 / 多人部署需要另外设计认证。
 
