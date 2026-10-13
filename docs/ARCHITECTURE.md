@@ -24,6 +24,6 @@ flowchart TB
 
 三平台都测试实际服务子进程的 MCP 发现、工具列表、无效帧恢复、单进程锁和 EOF 退出。共享离线演示跑真实 inbox、事件签名、工具读写、进度 / 最终回复、去重和重启恢复。附件与备份测试按原始字节比对，不只看状态字段。
 
-Windows 还应核验 ACL 和目录 junction；POSIX 核验权限和 symlink。CI 分别运行 Windows、Linux、macOS，而 Docker 只作为额外部署选项。
+Windows 测试核验 ACL 并拒绝目录 junction；POSIX 测试核验权限并拒绝 symlink。CI 分别运行 Windows、Linux、macOS，而 Docker 只作为额外部署选项。
 
 这些证明软件在各平台可以运行。真实微信回信、DOT 实际工具调用和平台原生审批仍要在自己的账号验收；尚未公开的控制接口不能用本地任务状态替代。

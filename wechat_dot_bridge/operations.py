@@ -49,10 +49,10 @@ def diagnostics(store, threshold=300):
 
 def backup(store, destination):
     from .private_paths import _private_directory
-    path=Path(destination).absolute()
-    for item in (path,*path.parents):
-        if item.is_symlink():
-            raise BridgeError('unsafe_path')
+    try:
+        path=reject_links(destination)
+    except ValueError:
+        raise BridgeError('unsafe_path') from None
     _private_directory(path.parent)
     fd=safe_open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
     created = os.fstat(fd)
@@ -123,9 +123,10 @@ def restore(source,directory):
     import stat
     from .private_paths import _private_directory
     directory = _private_directory(directory)
-    source=Path(source).absolute()
-    for item in (source,*source.parents):
-        if item.is_symlink(): raise BridgeError('unsafe_path')
+    try:
+        source=reject_links(source)
+    except ValueError:
+        raise BridgeError('unsafe_path') from None
     try:
         check_private_path(source)
     except (ValueError, OSError):

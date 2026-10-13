@@ -17,6 +17,12 @@ SPEC.loader.exec_module(SCAN)
 
 
 class SecretScanTests(unittest.TestCase):
+    def test_runtime_call_is_not_a_literal_but_quoted_and_yaml_values_are(self):
+        expression = "win32security.OpenProcessToken"
+        self.assertEqual(SCAN.secret_matches("token = " + expression + "(handle, access)"), [])
+        for text in ("token = " + repr(expression), "token: " + expression + "(handle)"):
+            self.assertEqual(SCAN.secret_matches(text), [("credential_literal", 1)])
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

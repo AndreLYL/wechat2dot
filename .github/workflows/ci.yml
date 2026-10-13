@@ -41,6 +41,7 @@ jobs:
       - name: Full POSIX regression and upgrade
         if: runner.os != 'Windows'
         run: |
+          export TMPDIR="$(uv run --frozen python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.gettempdir()).resolve())')"
           export WECHAT_BRIDGE_FFMPEG="$(uv run --frozen python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')"
           uv run --frozen python -m unittest discover -s tests -v
           uv run --frozen python scripts/verify-upgrade.py

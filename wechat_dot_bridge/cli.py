@@ -18,7 +18,7 @@ from .events import Events
 from .mcp import MCPServer
 from .typing import TypingIndicator
 from .media import MediaWorker
-from wechat2dot.platform import private_directory as native_directory, safe_open, check_private_fd, lock_exclusive
+from wechat2dot.platform import private_directory as native_directory, safe_open, check_private_fd, lock_exclusive, reject_links
 
 MAX_RPC_BYTES = 2 * 1024 * 1024
 
@@ -28,14 +28,14 @@ def canonical(value):
 
 
 def private_directory(path):
-    path = Path(path).absolute()
-    for component in (path, *path.parents):
-        if component.is_symlink():
-            raise BridgeError("unsafe_path")
+    try:
+        path = reject_links(path)
+    except ValueError:
+        raise BridgeError("unsafe_path") from None
     if path in {Path.home(), Path.cwd(), Path("/"), Path("/srv/data"), Path("/srv/stacks")}:
         raise BridgeError("unsafe_path")
     try:
-        native_directory(path)
+        path = native_directory(path)
     except ValueError as error:
         raise BridgeError(str(error) if str(error) in {"unsafe_owner", "unsafe_permissions"} else "unsafe_path") from None
     return path

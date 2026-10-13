@@ -23,7 +23,7 @@ TOKEN_PATTERNS = (
 )
 LITERAL = re.compile(
     r"\b(?P<name>(?:[A-Za-z][A-Za-z0-9_]*_)?(?:token|secret|api_key|runtime_key|aes_key|aeskey))"
-    r"[\"']?\s*[:=]\s*(?P<quote>[\"']?)(?P<value>[A-Za-z0-9_+/=.:%$<>@{}-]{8,512})",
+    r"[\"']?\s*(?P<operator>[:=])\s*(?P<quote>[\"']?)(?P<value>[A-Za-z0-9_+/=.:%$<>@{}-]{8,512})",
     re.IGNORECASE,
 )
 URL = re.compile(r"https?://[^\s\"'<>\[\]{}]+", re.IGNORECASE)
@@ -70,6 +70,13 @@ def secret_matches(text):
             found.add((category, text.count("\n", 0, match.start()) + 1))
     for match in LITERAL.finditer(text):
         value = match.group("value")
+        # An unquoted Python call creates a value at runtime. Its qualified
+        # function name is not a credential literal. Quoted strings and YAML
+        # scalars are still scanned, as are secrets inside the call arguments.
+        if (match.group("operator") == "=" and not match.group("quote")
+                and re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", value)
+                and text[match.end():].lstrip().startswith("(")):
+            continue
         if placeholder(value) or len(value) < 20 or entropy(value) < 3.0:
             continue
         if value.startswith("whsec_") and encoded_fixture(value[6:]):

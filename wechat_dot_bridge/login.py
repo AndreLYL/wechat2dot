@@ -56,6 +56,8 @@ def _login_lock(directory: Path):
         yield
     except BridgeError:
         raise
+    except ValueError:
+        raise BridgeError("unsafe_login_file") from None
     except OSError:
         raise BridgeError("login_state_unavailable") from None
     finally:
@@ -84,6 +86,8 @@ def _read_state(directory: Path) -> dict | None:
         return None
     except BridgeError:
         raise
+    except ValueError:
+        raise BridgeError("unsafe_login_file") from None
     except OSError:
         raise BridgeError("login_state_unavailable") from None
     finally:

@@ -552,12 +552,8 @@ class WeixinWorker:
 def _read_import_file(path: Path) -> bytes:
     descriptor = None
     try:
-        absolute = Path(os.path.abspath(path))
-        for component in (absolute, *absolute.parents):
-            metadata = component.lstat()
-            if stat.S_ISLNK(metadata.st_mode):
-                raise BridgeError("binding_invalid")
-        from wechat2dot.platform import safe_open
+        from wechat2dot.platform import safe_open, reject_links
+        absolute = reject_links(path)
         descriptor = safe_open(absolute, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise BridgeError("binding_invalid")
@@ -567,6 +563,8 @@ def _read_import_file(path: Path) -> bytes:
         if len(raw) > MAX_IMPORT_BYTES:
             raise BridgeError("binding_invalid")
         return raw
+    except ValueError:
+        raise BridgeError("binding_invalid") from None
     except OSError:
         raise BridgeError("import_failed") from None
     finally:

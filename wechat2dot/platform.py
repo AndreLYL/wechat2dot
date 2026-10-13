@@ -21,7 +21,8 @@ def reject_links(path):
         alias = path.parts[1]
         if alias in {"var", "tmp", "etc"}:
             system_path = Path("/") / alias
-            if system_path.is_symlink() and os.readlink(system_path) == "/private/" + alias:
+            if (system_path.is_symlink() and system_path.lstat().st_uid == 0
+                    and os.readlink(system_path) in {"/private/" + alias, "private/" + alias}):
                 path = Path("/private") / path.relative_to("/")
     for component in (path, *path.parents):
         try:
@@ -37,11 +38,11 @@ def _windows_identity():
     import win32api
     import win32con
     import win32security
-    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    security_handle = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
     try:
-        return win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+        return win32security.GetTokenInformation(security_handle, win32security.TokenUser)[0]
     finally:
-        token.Close()
+        security_handle.Close()
 
 
 def _windows_attributes(directory=False):

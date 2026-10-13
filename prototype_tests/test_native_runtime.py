@@ -62,6 +62,25 @@ class NativeRuntimeTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             new_file(path, "replace")
 
+    def test_redirected_directory_is_refused_without_touching_target(self):
+        target = self.root / "target"
+        target.mkdir()
+        link = self.root / "redirected"
+        if os.name == "nt":
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            link.symlink_to(target, target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(ValueError, "symlink_not_allowed"):
+                prepare(link / "runtime")
+            self.assertEqual(list(target.iterdir()), [])
+        finally:
+            if os.name == "nt":
+                link.rmdir()
+            else:
+                link.unlink()
+
     def test_hardlinked_database_is_refused(self):
         original = self.root / "original"
         new_file(original, "synthetic")

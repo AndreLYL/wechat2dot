@@ -79,7 +79,7 @@ uv run wechat2dot --config ./runtime/bridge.json resume --confirm-single-consume
 
 在本人微信发送含唯一标记的一条文字。核对同一 ID 的事件、读取和回复；工具状态应为 `accepted`，同时在微信端确认实际出现且仅出现一次回复。再试一条有进度与最终结果的任务，以及一张图片和一个小文件。
 
-用 [验收记录模板](VALIDATION.md)记录结果。wechat2dot 当前没有自己的真人验收记录，离线测试与上游实测均不能替代这个步骤。
+用 [验收记录模板](VALIDATION.md)记录结果。wechat2dot 当前没有真人验收记录，离线测试不能替代这个步骤。
 
 ## 停止与恢复
 
