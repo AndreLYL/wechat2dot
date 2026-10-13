@@ -2,7 +2,7 @@
 
 当前状态：**wechat2dot 自己的真人闭环尚未验证。**
 
-每次部署独立验收；不得将上游记录或 CI fixture 当作当前部署成功证明。公开记录不要含账号、手机号、二维码、消息正文、完整 callback URL、secret、token 或 key。
+每次部署独立验收；不得将他人的运行记录或 CI fixture 当作当前部署成功证明。公开记录不要含账号、手机号、二维码、消息正文、完整 callback URL、secret、token 或 key。
 
 | 检查点 | 结果 / 日期 / 脱敏证据 |
 | --- | --- |

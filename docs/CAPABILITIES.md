@@ -19,4 +19,4 @@
 
 事件只携带不透明消息 ID，DOT 通过私人 MCP 工具取正文。`queued` 表示已入队，`accepted` 表示腾讯接口受理，两者都不是用户看到了消息的证明。不确定的发送不自动重试。
 
-工具名保留上游兼容命名：`get_weixin_status`、`read_weixin_message`、`reply_weixin_message`、`report_weixin_progress`、`get_weixin_send_status`、`list_pending_weixin_messages`、`read_weixin_attachment`、`stage_weixin_attachment`、`import_weixin_attachment`、`reply_weixin_attachment`、`retry_weixin_operation`。
+MCP 暴露以下工具：`get_weixin_status`、`read_weixin_message`、`reply_weixin_message`、`report_weixin_progress`、`get_weixin_send_status`、`list_pending_weixin_messages`、`read_weixin_attachment`、`stage_weixin_attachment`、`import_weixin_attachment`、`reply_weixin_attachment`、`retry_weixin_operation`。

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import wave
 
 from wechat2dot.cli import main
 from wechat2dot.onboarding import prepare, diagnose, new_file
@@ -132,6 +133,26 @@ class NativeRuntimeTests(unittest.TestCase):
             # Match raw bytes, not only metadata.
             content = recovered.db.execute("SELECT data FROM attachments WHERE id=?", (identifier,)).fetchone()[0]
             self.assertEqual(content, "跨平台附件".encode())
+
+    def test_native_audio_codec_roundtrip(self):
+        from wechat_dot_bridge import audio
+        if not audio.available():
+            if os.environ.get("WECHAT2DOT_REQUIRE_CODECS") == "1":
+                self.fail("CI must install native Node, SILK and FFmpeg")
+            self.skipTest("Optional audio codecs not installed")
+        source = io.BytesIO()
+        with wave.open(source, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(24000)
+            wav.writeframes(b"\x00\x00\x80\x01" * 12000)
+        encoded = audio.to_silk(source.getvalue())
+        self.assertTrue(audio.is_silk(encoded))
+        with wave.open(io.BytesIO(audio.to_wav(encoded))) as wav:
+            self.assertEqual((wav.getnchannels(), wav.getsampwidth(), wav.getframerate()), (1, 2, 24000))
+            self.assertGreater(wav.getnframes(), 23000)
+        with self.assertRaisesRegex(BridgeError, "media_audio_conversion_failed"):
+            audio.to_silk(b"invalid audio")
 
     def test_actual_stdio_process_and_eof_release_single_consumer_lock(self):
         process = subprocess.Popen([sys.executable, "-m", "wechat2dot", "--config", str(self.config), "serve"],

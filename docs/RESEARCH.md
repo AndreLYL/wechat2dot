@@ -4,7 +4,7 @@ GitHub 已有直接连接现有 DOT 与微信的项目，因此机会在于安�
 
 | 项目 | 源码中的主要路线 | 对 wechat2dot 的意义 |
 | --- | --- | --- |
-| [cd233ljx/wechat-dot-bridge](https://github.com/cd233ljx/wechat-dot-bridge) | Python / Linux；iLink、持久收发、MCP Events、私人 Tunnel、媒体工具 | MIT 复用基础；上游作者有真人记录，但本项目仍需独立验收 |
+| [cd233ljx/wechat-dot-bridge](https://github.com/cd233ljx/wechat-dot-bridge) | Python / Linux；iLink、持久收发、MCP Events、私人 Tunnel、媒体工具 | 已有相近链路；原生跨平台运行与安装体验是产品差异 |
 | [RerrentLinden/dots-wechat-bridge](https://github.com/RerrentLinden/dots-wechat-bridge) | Python；签名事件、ack / final 回复阶段、恢复 | 参考阶段性回复与操作指引 |
 | [xavierliang/wechat-dot-bridge](https://github.com/xavierliang/wechat-dot-bridge) | Node / Docker / OAuth；接入与验证分阶段 | 多人部署需要认证，首版选择单人私有模式 |
 | [Ericwong5021/dots-wechat](https://github.com/Ericwong5021/dots-wechat) | 微信适配、DOT 事件与配置探索 | 不把未验收链路当稳定能力 |

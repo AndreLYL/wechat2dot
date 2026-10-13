@@ -16,7 +16,11 @@ dependencies = [
   "standardwebhooks>=1.0.0,<2",
   "portalocker>=4.3,<5", "pywin32>=311; sys_platform == 'win32'",
 ]
-classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"]
+classifiers = [
+  "Development Status :: 3 - Alpha", "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows", "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+]
 
 [project.optional-dependencies]
 setup = ["qrcode==8.2"]
