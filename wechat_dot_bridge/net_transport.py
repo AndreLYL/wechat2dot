@@ -495,7 +495,7 @@ def request(hostname, addresses, method, target, body, headers, *, timeout,
         method, target, body, headers, max_response, body_statuses)
 
 
-def presence_stop(hostname, body, headers):
+def presence_stop(hostname, body, headers, *, addresses=None):
     """Only a shutdown typing-stop gets an independent, total three-second budget.
 
     This is a constrained operation rather than a cancellation override on the
@@ -519,8 +519,11 @@ def presence_stop(hostname, body, headers):
         raise NetworkFailure('presence_stop_invalid') from None
     deadline = time.monotonic() + 3
     cleanup_signal = threading.Event()
-    addresses = _resolve_public_addresses(hostname, deadline - time.monotonic(), DNS_SLOTS,
-                                         cleanup_signal, deadline=deadline)
+    if addresses is None:
+        addresses = _resolve_public_addresses(hostname, deadline - time.monotonic(), DNS_SLOTS,
+                                             cleanup_signal, deadline=deadline)
+    else:
+        addresses = checked_addresses(addresses)
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise NetworkFailure('timeout')

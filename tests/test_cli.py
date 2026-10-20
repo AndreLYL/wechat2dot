@@ -92,6 +92,19 @@ class StdioTests(unittest.TestCase):
 
 
 class SetupTests(unittest.TestCase):
+    def test_weixin_dns_is_explicit_and_rejects_unknown_providers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'config.json'
+            for value in ('system','google','untrusted.example.com',None,[]):
+                path.write_text(json.dumps({'weixin_dns':value}))
+                args = Namespace(config=str(path),state_dir=None)
+                if value in ('system','google'):
+                    load_config(args)
+                    self.assertEqual(args.weixin_dns,value)
+                else:
+                    with self.assertRaisesRegex(BridgeError,'^config_invalid$'):
+                        load_config(args)
+
     def test_callback_network_options_are_operator_only_and_loopback_only(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"

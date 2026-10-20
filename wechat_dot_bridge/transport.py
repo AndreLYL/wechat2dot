@@ -18,7 +18,7 @@ import tomllib
 from urllib.parse import urlsplit
 
 from .errors import BridgeError
-from .net_transport import DNS_SLOTS, NetworkFailure, PinnedRequest, presence_stop, resolve_public_addresses
+from .net_transport import DNS_SLOTS, NetworkFailure, PinnedRequest, presence_stop, resolve_addresses
 
 
 DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -29,6 +29,7 @@ MAX_CONTEXT_BYTES = 16384
 MAX_CURSOR_BYTES = 65536
 DNS_TIMEOUT_SECONDS = 10.0
 _DNS_SLOTS = DNS_SLOTS
+NETWORK_DNS = "system"
 _ID = re.compile(r"[A-Za-z0-9@._-]{1,128}\Z")
 _OWNER = re.compile(r"[A-Za-z0-9@._+-]{1,256}\Z")
 
@@ -81,10 +82,17 @@ def _endpoint(base_url: str) -> tuple[str, str]:
         raise BridgeError("endpoint_rejected") from None
 
 
+def configure_network(dns="system"):
+    if dns not in ("system", "google"):
+        raise BridgeError("config_invalid")
+    global NETWORK_DNS
+    NETWORK_DNS = dns
+
+
 def _resolve_public(host: str) -> str:
     """Shared bounded DNS validates every answer before selecting an address."""
     try:
-        return resolve_public_addresses(host, DNS_TIMEOUT_SECONDS, _DNS_SLOTS)[0][3][0]
+        return resolve_addresses(host, dns=NETWORK_DNS, timeout=DNS_TIMEOUT_SECONDS, slots=_DNS_SLOTS)[0][3][0]
     except NetworkFailure as error:
         category = {"timeout": "network_timeout", "cancelled": "network_cancelled"}.get(error.category, "dns_rejected")
         raise BridgeError(category) from None
@@ -128,6 +136,7 @@ class IlinkClient:
         self.poll_timeout = 40.0
         self.connections = set()
         self.connection_lock = __import__("threading").Lock()
+        self.resolved = {}
 
     def cancel(self):
         with self.connection_lock:
@@ -166,6 +175,7 @@ class IlinkClient:
         binding = _binding(binding)
         host, _origin = _endpoint(binding["base_url"])
         address = _resolve_public(host)
+        self.resolved[host] = address
         connection = None
         try:
             encoded = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -243,7 +253,10 @@ class IlinkClient:
                            "status": 2, "base_info": self._base_info()},
                           ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         try:
-            response = presence_stop(host, body, self._headers(checked))
+            # Reuse only a validated numeric endpoint from this client's own
+            # request. Shutdown must not restart a cancelled DoH exchange.
+            addresses = _pinned_address(self.resolved[host]) if NETWORK_DNS == "google" and host in self.resolved else None
+            response = presence_stop(host, body, self._headers(checked), addresses=addresses)
             error = _application_error(self._response(response, void_ack=True))
             if error:
                 raise BridgeError(error)

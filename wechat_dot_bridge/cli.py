@@ -71,8 +71,11 @@ def load_config(args):
             config = json.loads(path.read_text())
         except (OSError, ValueError):
             raise BridgeError("config_invalid") from None
-        if not isinstance(config, dict) or set(config) - {"state_dir", "callback_hosts", "lock_dir", "callback_proxy", "callback_dns", "media_proxy", "media_dns", "media_policy", "maintenance_policy"}:
+        if not isinstance(config, dict) or set(config) - {"state_dir", "callback_hosts", "lock_dir", "callback_proxy", "callback_dns", "media_proxy", "media_dns", "weixin_dns", "media_policy", "maintenance_policy"}:
             raise BridgeError("config_invalid")
+    args.weixin_dns = config.get("weixin_dns", "system")
+    if args.weixin_dns not in ("system", "google"):
+        raise BridgeError("config_invalid")
     from .maintenance import validate_policy
     args.maintenance_policy = validate_policy(config.get("maintenance_policy", {}))
     policy = config.get("media_policy", {})
@@ -309,6 +312,8 @@ def main(argv=None):
     store = None
     try:
         state, hosts, lock_dir, proxy, dns, media_proxy, media_dns = load_config(args)
+        from .transport import configure_network
+        configure_network(args.weixin_dns)
         state = private_directory(state)
         if args.command == "restore-backup":
             from .operations import restore

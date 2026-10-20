@@ -13,6 +13,8 @@ from wechat_dot_bridge import media, net_transport as net
 from wechat_dot_bridge.artifacts import download
 from wechat_dot_bridge.errors import BridgeError
 from wechat_dot_bridge.events import secure_post
+from wechat_dot_bridge import transport
+from wechat_dot_bridge.login import LoginClient
 
 
 class SharedDNSTransportTests(unittest.TestCase):
@@ -22,6 +24,7 @@ class SharedDNSTransportTests(unittest.TestCase):
     def setUp(self):
         net.reset_cancellation()
         self.previous = media.NETWORK_PROXY, media.NETWORK_DNS
+        self.previous_weixin = transport.NETWORK_DNS
         media.configure_network(self.PROXY, 'google')
         self.block_dns = patch('wechat_dot_bridge.net_transport.socket.getaddrinfo',
                                side_effect=AssertionError('real DNS forbidden'))
@@ -34,6 +37,7 @@ class SharedDNSTransportTests(unittest.TestCase):
         self.block_socket.stop()
         self.block_dns.stop()
         media.configure_network(*self.previous)
+        transport.configure_network(self.previous_weixin)
         net.reset_cancellation()
 
     @staticmethod
@@ -115,6 +119,54 @@ class SharedDNSTransportTests(unittest.TestCase):
             self.assertTrue(all(tls.closed for tls in sockets))
             self.assertEqual(factory.call_count, 2)
             dns.assert_not_called()
+
+    def test_weixin_login_and_authenticated_poll_use_doh_without_leaking_credentials(self):
+        transport.configure_network('google')
+        for login in (True, False):
+            with self.subTest(login=login), self.network([
+                    self.response(200, self.answer()), self.response(200, b'{}')]) as (raws, sockets, names, _, dns):
+                if login:
+                    LoginClient().start_login()
+                else:
+                    transport.IlinkClient().poll({'id':'fixture', 'owner':'fixture-owner',
+                                                  'token':'fixture-private-token',
+                                                  'base_url':'https://ilinkai.weixin.qq.com'})
+            self.assertEqual(names, ['dns.google', 'ilinkai.weixin.qq.com'])
+            self.assertEqual([raw.connected for raw in raws], [[('8.8.8.8',443)], [(self.IP,443)]])
+            provider = b''.join(sockets[0].sent)
+            application = b''.join(sockets[1].sent)
+            self.assertNotIn(b'fixture-private', provider)
+            self.assertNotIn(b'Authorization', provider)
+            self.assertIn(b'Host: ilinkai.weixin.qq.com', application)
+            if not login:
+                self.assertIn(b'Bearer fixture-private-token', application)
+            dns.assert_not_called()
+
+    def test_weixin_mixed_public_and_fake_ip_doh_answer_rejected_before_login(self):
+        transport.configure_network('google')
+        records = [{'type':1,'data':self.IP}, {'type':1,'data':'198.18.2.144'}]
+        with self.network([self.response(200,self.answer(records))]) as (_, _, names, factory, _):
+            with self.assertRaisesRegex(BridgeError, '^dns_rejected$'):
+                LoginClient().start_login()
+        self.assertEqual(names, ['dns.google'])
+        factory.assert_called_once()
+
+    def test_weixin_shutdown_with_doh_stops_typing_without_restarting_cancelled_dns(self):
+        transport.configure_network('google')
+        client = transport.IlinkClient()
+        binding = {'id':'fixture','owner':'fixture-owner','token':'fixture-private-token',
+                   'base_url':'https://ilinkai.weixin.qq.com'}
+        with self.network([self.response(200,self.answer()), self.response(200,b'{}'),
+                           self.response(200,b'')]) as (raws, sockets, names, _, dns):
+            client.poll(binding)
+            net.cancel_all()
+            client.stop_typing(binding,'fixture-private-ticket')
+        self.assertEqual(names,['dns.google','ilinkai.weixin.qq.com','ilinkai.weixin.qq.com'])
+        self.assertEqual(raws[-1].connected,[(self.IP,443)])
+        self.assertIn(b'POST /ilink/bot/sendtyping',b''.join(sockets[-1].sent))
+        self.assertIn(b'"status":2',b''.join(sockets[-1].sent))
+        self.assertTrue(net.cancellation_token().is_set())
+        dns.assert_not_called()
 
     def test_mixed_private_doh_answers_reject_before_application_and_never_fall_back(self):
         records = [{'type': 1, 'data': self.IP}, {'type': 1, 'data': '127.0.0.1'}]

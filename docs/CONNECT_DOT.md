@@ -37,6 +37,8 @@ uv run wechat2dot --config ./runtime/bridge.json login
 
 用本人微信扫描终端中的二维码；不要分享终端。若微信要求手机验证码，使用 `login-poll --verification-code`，参数帮助见 `login-poll --help`。扫码只是绑定微信，收信默认仍暂停。
 
+如果一直没有二维码并返回 `dns_rejected`，检查系统是否把该域名解析为代理的 Fake-IP（例如 `198.18.x.x`）。可在停止桥接服务后，向私人 `bridge.json` 添加 `"weixin_dns": "google"`，再重新登录。此选项使用固定 Google HTTPS DNS 服务解析微信域名，消息仍通过验证微信域名证书的 HTTPS 直连发送；不会把二维码、验证码或微信凭据发送给 DNS 服务。默认 `system`，两种模式都拒绝非公网地址，不会自动切换或关闭 TLS 校验。若媒体或事件回调也遇到此问题，可分别配置已有的 `media_dns`、`callback_dns` 为 `google`。
+
 ## 3. Tunnel 与私人插件
 
 保持官方客户端在前台运行：
