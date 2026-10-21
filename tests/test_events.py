@@ -9,7 +9,9 @@ import ssl
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from network_fixtures import FakeSocket, FakeTimer
 
 from wechat_dot_bridge.errors import BridgeError
 from wechat_dot_bridge.events import (Events, MAX_ATTEMPTS, MAX_DNS_RESPONSE,
@@ -76,6 +78,42 @@ class EventTests(unittest.TestCase):
         self.store.fail_attachment(aid, "media_decryption_failed")
         self.assertTrue(self.events.deliver_once())
         self.assertEqual(json.loads(self.callback.calls[-1][1])["data"]["message_id"], mid)
+
+    def test_tls_disconnect_event_retries_after_restart_with_same_id_but_bad_certificate_stops(self):
+        for certificate_failure in (False, True):
+            with self.subTest(certificate_failure=certificate_failure):
+                self.events.subscribe(self.params)
+                mid = self.ingest('tls-'+str(certificate_failure))
+                failed = FakeSocket()
+                error = ssl.SSLCertVerificationError('fixture-private') if certificate_failure else ssl.SSLEOFError('fixture-private')
+                failed.on_handshake = lambda failure=error: (_ for _ in ()).throw(failure)
+                success = FakeSocket(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}')
+                context = Mock()
+                context.wrap_socket.side_effect = [failed, success]
+                addresses = [(socket.AF_INET,socket.SOCK_STREAM,socket.IPPROTO_TCP,('8.8.8.8',443))]
+                self.events.post = lambda url,body,headers: secure_post(url,body,headers,{'callback.example.com'})
+                with patch('wechat_dot_bridge.events._public_addresses',return_value=addresses), \
+                     patch('wechat_dot_bridge.net_transport.socket.socket',side_effect=lambda *args:FakeSocket()), \
+                     patch('wechat_dot_bridge.net_transport.ssl.create_default_context',return_value=context), \
+                     patch('wechat_dot_bridge.net_transport.threading.Timer',FakeTimer):
+                    self.assertTrue(self.events.deliver_once())
+                    row=self.store.db.execute('SELECT event_id,status,error FROM deliveries WHERE message_id=?',(mid,)).fetchone()
+                    event_id=row['event_id']
+                    self.assertEqual(row['status'],'failed' if certificate_failure else 'retry')
+                    self.assertEqual(row['error'],'callback_tls_failed' if certificate_failure else 'callback_network_failed')
+                    post=self.events.post
+                    self.store.close()
+                    self.store=Store(self.directory.name,clock=self.clock)
+                    self.events=Events(self.store,['callback.example.com'],post,self.clock)
+                    self.clock.now+=3
+                    self.assertEqual(self.events.deliver_once(),not certificate_failure)
+                    row=self.store.db.execute('SELECT event_id,status,attempts FROM deliveries WHERE message_id=?',(mid,)).fetchone()
+                    self.assertEqual(row['event_id'],event_id)
+                    self.assertEqual(row['status'],'failed' if certificate_failure else 'acknowledged')
+                    self.assertEqual(row['attempts'],1 if certificate_failure else 2)
+                self.events.post=self.callback
+                self.store.read_message(mid)
+                self.store.queue_reply(mid,'fixture-completed')
 
     def test_first_attempts_preserve_ingest_order_for_equal_timestamps(self):
         self.events.subscribe(self.params)

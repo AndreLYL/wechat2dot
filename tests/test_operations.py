@@ -45,7 +45,7 @@ class OperationsTests(unittest.TestCase):
         reply=self.store.claim_send();self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
         self.assertEqual(self.store.list_pending(),[])
 
-    def test_waiting_messages_remain_diagnostic_without_automatic_notices(self):
+    def test_unread_notice_leaves_stalled_and_unread_work_diagnostic(self):
         self.store.ingest('bot',[dict(source_id='2',peer='owner',text='file task',created_at=self.now,context_token='PRIVATE_CONTEXT')],'2')
         second=self.store.list_pending()[-1]['message_id']
         self.store.record_tool_call('read_weixin_message',second,'ok')
@@ -54,10 +54,44 @@ class OperationsTests(unittest.TestCase):
         for _ in range(3):
             HealthMonitor(self.store).tick()
             self.now+=301
-        self.assertIsNone(self.store.claim_send())
+        notice=self.store.claim_send()
+        self.assertIsNotNone(notice)
+        self.assertIn('DOT',notice['text'])
+        self.assertNotIn('PRIVATE',notice['text'])
         self.assertEqual(len(self.store.list_pending()),2)
         self.assertEqual({r['code'] for r in diagnostics(self.store)['issues']},
                          {'message_unread','processing_stalled','subscription_inactive'})
+
+    def test_unread_notice_does_not_complete_work_or_repeat_after_restart(self):
+        self.now+=61
+        HealthMonitor(self.store).tick()
+        notice=self.store.claim_send()
+        self.assertIsNotNone(notice)
+        self.assertIn('尚未读取',notice['text'])
+        self.store.finish_send(self.mid,'accepted',reply_id=notice['reply_id'])
+        self.assertEqual(len(self.store.list_pending()),1)
+        self.store.close()
+        self.store=Store(Path(self.tmp.name)/'state',clock=lambda:self.now)
+        self.now+=61
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
+        self.store.read_message(self.mid)
+        self.store.queue_reply(self.mid,'actual result',reply_key='actual')
+        reply=self.store.claim_send()
+        self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
+        self.assertEqual(self.store.list_pending(),[])
+
+    def test_no_waiting_notice_before_threshold_or_after_user_reply(self):
+        self.now+=59
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
+        self.store.read_message(self.mid)
+        self.store.queue_reply(self.mid,'working',final=False)
+        reply=self.store.claim_send()
+        self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
+        self.now+=601
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
 
     def test_uncertain_send_never_triggers_notice_or_resend(self):
         self.store.queue_reply(self.mid,'response')

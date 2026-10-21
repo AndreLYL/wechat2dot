@@ -88,12 +88,13 @@ class HealthMonitor:
         binding=self.store.get_binding()
         if not binding or not binding['enabled'] or binding['status']!='ready':
             return
-        issue=diagnostics(self.store)
+        issue=diagnostics(self.store, threshold=60)
         for item in issue['issues']:
             mid=item.get('message_id')
-            # Waiting age is an observation, not a dot execution failure.
-            # Unlike cc-connect, this bridge does not own the agent event loop.
-            if not mid or item['code'] not in {'reply_failed', 'reply_context_required', 'reply_auth_required'}:
+            # An unread notice reports a measured wait, never an agent failure
+            # or completion. Active processing leases remain excluded above.
+            waiting = item['code'] == 'message_unread'
+            if not mid or item['code'] not in {'message_unread', 'reply_failed', 'reply_context_required', 'reply_auth_required'}:
                 continue
             # Respect the channel's explicit flood-control response: another
             # status message would only add pressure to the same rate limit.
@@ -111,9 +112,16 @@ class HealthMonitor:
                 # At most one notice per inbound message, persisted across restarts.
                 if self.store.db.execute('SELECT 1 FROM replies WHERE message_id=? AND is_notice=1',(mid,)).fetchone():
                     continue
-            text='【桥接状态】这条来信的回复发送遇到了问题，请让原 dot 查询对应 reply_id 的发送状态。消息记录已保留。'
+                if waiting:
+                    work = self.store.db.execute('SELECT state,read_at FROM message_work WHERE message_id=?',(mid,)).fetchone()
+                    if (not work or work['state'] != 'waiting' or work['read_at'] is not None
+                            or self.store.db.execute('SELECT 1 FROM replies WHERE message_id=? AND is_notice=0',(mid,)).fetchone()
+                            or self.store.db.execute("SELECT 1 FROM tool_calls WHERE message_id=? AND name='read_weixin_message' AND outcome='ok'",(mid,)).fetchone()):
+                        continue
+            text=('【桥接状态】这条来信已保存；检测到 DOT 尚未读取，仍在等待处理。'
+                  if waiting else '【桥接状态】这条来信的回复发送遇到了问题，请让原 dot 查询对应 reply_id 的发送状态。消息记录已保留。')
             try:
-                self.store.queue_reply(mid,text,reply_key='bridge_status_notice',notice=True)
+                self.store.queue_reply(mid,text,reply_key='bridge_status_notice',notice=True,final=not waiting)
                 break
             except BridgeError:
                 pass
