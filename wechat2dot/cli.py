@@ -110,6 +110,8 @@ def _login(config):
     import qrcode
     args = parser().parse_args(["--config", config, "login-start"])
     state, *_ = load_config(args)
+    from wechat_dot_bridge.transport import configure_network
+    configure_network(args.weixin_dns)
     with acquire_lock(state / "worker.lock"):
         result = start_login(state)
         if result.get("bound"):
