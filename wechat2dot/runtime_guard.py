@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -44,8 +45,17 @@ def load_settings(path):
 
 
 def _invoke(command):
+    options = {}
+    if os.name == 'nt':
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        # The official client also starts console children. A hidden console
+        # lets those children inherit it instead of allocating visible ones.
+        options.update(startupinfo=startup, creationflags=subprocess.CREATE_NEW_CONSOLE)
     try:
-        result = subprocess.run(command, capture_output=True, timeout=45, check=False)
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                                timeout=45, check=False, **options)
     except subprocess.TimeoutExpired:
         raise ValueError('runtime_command_timeout') from None
     except OSError:
