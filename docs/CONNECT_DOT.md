@@ -41,13 +41,15 @@ uv run wechat2dot --config ./runtime/bridge.json login
 
 ## 3. Tunnel 与私人插件
 
-保持官方客户端在前台运行：
+首次联调可让官方客户端在前台运行：
 
 ```sh
 /absolute/path/to/tunnel-client run --profile-file ./runtime/tunnel.yaml
 ```
 
 Windows PowerShell 使用 `& 'C:\Tools\tunnel-client.exe' run --profile-file ./runtime/tunnel.yaml`。三个系统都使用安装器生成的配置，路径里的空格会被正确保留。
+
+持续使用前，按[稳定性与恢复指南](RELIABILITY.md)改用官方受管进程，并安装本人系统的定期恢复检查。以下前台命令用于联调；终端退出、主机重启或休眠都可能让桥接离线。受管部署修改配置时须同时暂停守护检查，防止它在维护期间重新拉起进程。
 
 创建仅本人可访问的开发者插件，连接方式选 Tunnel 并使用真实控制台 identity。此部署为私人 stdio 服务，使用无认证模式并依靠 Tunnel 访问控制；公共插件 / 多人部署需要另外设计认证。
 
@@ -64,7 +66,7 @@ uv run wechat2dot --config ./runtime/bridge.json allow-callback VERIFIED_HOSTNAM
 /absolute/path/to/tunnel-client run --profile-file ./runtime/tunnel.yaml
 ```
 
-在同一个 dot 重新订阅。确认签名 challenge 验证完成且 `active_subscriptions` 为 1；运行中的 Tunnel 本身不能证明事件已接通。订阅默认有期限；按需刷新，明确 `ttlMs:null` 可请求无到期订阅。桥接侧与平台任务状态要分别核验。
+在同一个 dot 重新订阅。确认签名 challenge 验证完成且 `active_subscriptions` 为 1；运行中的 Tunnel 本身不能证明事件已接通。订阅默认有期限；按需刷新，明确 `ttlMs:null` 可请求无到期订阅。平台未提供该参数时，本人可按[持续订阅步骤](RELIABILITY.md#订阅与待办)设置当前订阅策略。桥接侧与平台任务状态要分别核验。
 
 可给 dot 以下任务约定，替换插件名称为你自己的名称：
 
@@ -81,7 +83,7 @@ uv run wechat2dot --config ./runtime/bridge.json resume --confirm-single-consume
 
 在本人微信发送含唯一标记的一条文字。核对同一 ID 的事件、读取和回复；工具状态应为 `accepted`，同时在微信端确认实际出现且仅出现一次回复。再试一条有进度与最终结果的任务，以及一张图片和一个小文件。
 
-用 [验收记录模板](VALIDATION.md)记录结果。wechat2dot 当前没有真人验收记录，离线测试不能替代这个步骤。
+每次部署用 [验收记录模板](VALIDATION.md)记录结果，离线测试不能替代微信端真人验收。
 
 ## 停止与恢复
 
