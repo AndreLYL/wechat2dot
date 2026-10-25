@@ -46,6 +46,8 @@ docker run --rm --network none wechat2dot:local demo
 
 Windows、Linux、macOS 使用相同 CLI 原生运行，不要求安装 Docker 或 WSL。按 [接入指南](docs/CONNECT_DOT.md)依次核对权限、创建私人配置、扫码绑定、连接 Tunnel、订阅事件、恢复收信，再完成微信端真人验收。需要容器部署时见 [Docker 指南](docs/DOCKER.md)。
 
+持续使用需配置受管进程、系统恢复检查与订阅续期，见[稳定性与恢复](docs/RELIABILITY.md)。本机休眠或关机期间无法处理微信任务。
+
 ## 第一版能做什么
 
 | 能力 | 实现与限制 |

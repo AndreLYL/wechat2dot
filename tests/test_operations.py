@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock,patch
 from wechat_dot_bridge.store import Store
@@ -45,7 +46,7 @@ class OperationsTests(unittest.TestCase):
         reply=self.store.claim_send();self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
         self.assertEqual(self.store.list_pending(),[])
 
-    def test_waiting_messages_remain_diagnostic_without_automatic_notices(self):
+    def test_unread_notice_leaves_stalled_and_unread_work_diagnostic(self):
         self.store.ingest('bot',[dict(source_id='2',peer='owner',text='file task',created_at=self.now,context_token='PRIVATE_CONTEXT')],'2')
         second=self.store.list_pending()[-1]['message_id']
         self.store.record_tool_call('read_weixin_message',second,'ok')
@@ -54,10 +55,94 @@ class OperationsTests(unittest.TestCase):
         for _ in range(3):
             HealthMonitor(self.store).tick()
             self.now+=301
-        self.assertIsNone(self.store.claim_send())
+        notice=self.store.claim_send()
+        self.assertIsNotNone(notice)
+        self.assertIn('DOT',notice['text'])
+        self.assertNotIn('PRIVATE',notice['text'])
         self.assertEqual(len(self.store.list_pending()),2)
         self.assertEqual({r['code'] for r in diagnostics(self.store)['issues']},
                          {'message_unread','processing_stalled','subscription_inactive'})
+
+    def test_unread_notice_does_not_complete_work_or_repeat_after_restart(self):
+        self.now+=61
+        HealthMonitor(self.store).tick()
+        notice=self.store.claim_send()
+        self.assertIsNotNone(notice)
+        self.assertIn('尚未读取',notice['text'])
+        self.store.finish_send(self.mid,'accepted',reply_id=notice['reply_id'])
+        self.assertEqual(len(self.store.list_pending()),1)
+        self.store.close()
+        self.store=Store(Path(self.tmp.name)/'state',clock=lambda:self.now)
+        self.now+=61
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
+        self.store.read_message(self.mid)
+        self.store.queue_reply(self.mid,'actual result',reply_key='actual')
+        reply=self.store.claim_send()
+        self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
+        self.assertEqual(self.store.list_pending(),[])
+
+    def test_no_waiting_notice_before_threshold_or_after_user_reply(self):
+        self.now+=59
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
+        self.store.read_message(self.mid)
+        self.store.queue_reply(self.mid,'working',final=False)
+        reply=self.store.claim_send()
+        self.store.finish_send(self.mid,'accepted',reply_id=reply['reply_id'])
+        self.now+=601
+        HealthMonitor(self.store).tick()
+        self.assertIsNone(self.store.claim_send())
+
+    def test_notice_admission_cannot_be_overtaken_by_dot_read_and_reply(self):
+        self.now += 61
+        admission, proceed, reader_started, reader_done = (threading.Event() for _ in range(4))
+        errors = []
+        original = self.store.queue_reply
+
+        def queue_notice(*args, **kwargs):
+            if kwargs.get('notice'):
+                admission.set()
+                if not proceed.wait(3):
+                    raise RuntimeError('fixture_admission_timeout')
+            return original(*args, **kwargs)
+
+        def monitor():
+            try:
+                HealthMonitor(self.store).tick()
+            except BaseException as error:
+                errors.append(error)
+
+        def reader():
+            reader_started.set()
+            try:
+                self.store.read_message(self.mid)
+                self.store.queue_reply(self.mid, 'actual result', reply_key='actual')
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                reader_done.set()
+
+        monitor_thread, reader_thread = threading.Thread(target=monitor), threading.Thread(target=reader)
+        with patch.object(self.store, 'queue_reply', side_effect=queue_notice):
+            monitor_thread.start()
+            try:
+                self.assertTrue(admission.wait(2))
+                reader_thread.start()
+                self.assertTrue(reader_started.wait(2))
+                # A concurrent DOT result cannot commit after eligibility was
+                # checked but before the waiting notice enters the queue.
+                self.assertFalse(reader_done.wait(0.1))
+            finally:
+                proceed.set()
+                monitor_thread.join(3)
+                if reader_thread.ident is not None:
+                    reader_thread.join(3)
+        self.assertFalse(monitor_thread.is_alive())
+        self.assertFalse(reader_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual([r[0] for r in self.store.db.execute(
+            'SELECT is_notice FROM replies WHERE message_id=? ORDER BY rowid', (self.mid,))], [1, 0])
 
     def test_uncertain_send_never_triggers_notice_or_resend(self):
         self.store.queue_reply(self.mid,'response')

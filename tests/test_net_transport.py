@@ -7,6 +7,7 @@ import hmac
 import io
 import logging
 import socket
+import ssl
 import tempfile
 import threading
 import time
@@ -57,6 +58,21 @@ class CommunityNetworkTests(unittest.TestCase):
         self.assertEqual(caught.exception.category, "response_too_large")
         factory.assert_called_once()
         self.assertTrue(self.tls.closed)
+
+    def test_certificate_failure_stays_terminal_but_tls_eof_is_retryable_network_failure(self):
+        for exception, category in ((ssl.SSLCertVerificationError('fixture-private-cert'), 'tls'),
+                                    (ssl.SSLEOFError('fixture-private-eof'), 'network')):
+            with self.subTest(exception=type(exception).__name__):
+                self.raw = FakeSocket()
+                self.tls = FakeSocket()
+                self.context.wrap_socket.return_value = self.tls
+                self.tls.on_handshake = lambda error=exception: (_ for _ in ()).throw(error)
+                with self.network(), self.assertRaises(net.NetworkFailure) as caught:
+                    self.request()
+                self.assertEqual(caught.exception.category, category)
+                self.assertNotIn('fixture-private', str(caught.exception))
+                self.context.wrap_socket.assert_called_with(self.raw, server_hostname=self.HOST,
+                                                           do_handshake_on_connect=False)
 
     def test_declared_length_rejects_before_waiting_for_large_body(self):
         self.tls.response = b"HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\n\r\n"

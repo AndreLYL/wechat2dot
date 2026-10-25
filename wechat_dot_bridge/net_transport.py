@@ -464,10 +464,18 @@ class PinnedRequest:
             if self.backend.cancelled.is_set() or self.cancellation.is_set():
                 raise NetworkAbort() from None
             raise NetworkFailure("timeout", phase=self.backend.phase) from None
-        except ssl.SSLError:
+        except ssl.SSLCertVerificationError:
             if self.backend.cancelled.is_set() or self.cancellation.is_set():
                 raise NetworkAbort() from None
             raise NetworkFailure("timeout" if self.backend.expired.is_set() else "tls",
+                                 phase=self.backend.phase) from None
+        except ssl.SSLError:
+            if self.backend.cancelled.is_set() or self.cancellation.is_set():
+                raise NetworkAbort() from None
+            # An EOF/reset during TLS is a transport interruption, not proof
+            # that the peer certificate is invalid. Callers may retry safely;
+            # every new exchange still performs full hostname verification.
+            raise NetworkFailure("timeout" if self.backend.expired.is_set() else "network",
                                  phase=self.backend.phase) from None
         except (httpcore.ProtocolError, httpcore.ProxyError, ValueError, TypeError, UnicodeError):
             if self.backend.cancelled.is_set() or self.cancellation.is_set():
