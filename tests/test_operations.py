@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock,patch
 from wechat_dot_bridge.store import Store
@@ -92,6 +93,56 @@ class OperationsTests(unittest.TestCase):
         self.now+=601
         HealthMonitor(self.store).tick()
         self.assertIsNone(self.store.claim_send())
+
+    def test_notice_admission_cannot_be_overtaken_by_dot_read_and_reply(self):
+        self.now += 61
+        admission, proceed, reader_started, reader_done = (threading.Event() for _ in range(4))
+        errors = []
+        original = self.store.queue_reply
+
+        def queue_notice(*args, **kwargs):
+            if kwargs.get('notice'):
+                admission.set()
+                if not proceed.wait(3):
+                    raise RuntimeError('fixture_admission_timeout')
+            return original(*args, **kwargs)
+
+        def monitor():
+            try:
+                HealthMonitor(self.store).tick()
+            except BaseException as error:
+                errors.append(error)
+
+        def reader():
+            reader_started.set()
+            try:
+                self.store.read_message(self.mid)
+                self.store.queue_reply(self.mid, 'actual result', reply_key='actual')
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                reader_done.set()
+
+        monitor_thread, reader_thread = threading.Thread(target=monitor), threading.Thread(target=reader)
+        with patch.object(self.store, 'queue_reply', side_effect=queue_notice):
+            monitor_thread.start()
+            try:
+                self.assertTrue(admission.wait(2))
+                reader_thread.start()
+                self.assertTrue(reader_started.wait(2))
+                # A concurrent DOT result cannot commit after eligibility was
+                # checked but before the waiting notice enters the queue.
+                self.assertFalse(reader_done.wait(0.1))
+            finally:
+                proceed.set()
+                monitor_thread.join(3)
+                if reader_thread.ident is not None:
+                    reader_thread.join(3)
+        self.assertFalse(monitor_thread.is_alive())
+        self.assertFalse(reader_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual([r[0] for r in self.store.db.execute(
+            'SELECT is_notice FROM replies WHERE message_id=? ORDER BY rowid', (self.mid,))], [1, 0])
 
     def test_uncertain_send_never_triggers_notice_or_resend(self):
         self.store.queue_reply(self.mid,'response')

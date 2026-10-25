@@ -118,13 +118,16 @@ class HealthMonitor:
                             or self.store.db.execute('SELECT 1 FROM replies WHERE message_id=? AND is_notice=0',(mid,)).fetchone()
                             or self.store.db.execute("SELECT 1 FROM tool_calls WHERE message_id=? AND name='read_weixin_message' AND outcome='ok'",(mid,)).fetchone()):
                         continue
-            text=('【桥接状态】这条来信已保存；检测到 DOT 尚未读取，仍在等待处理。'
-                  if waiting else '【桥接状态】这条来信的回复发送遇到了问题，请让原 dot 查询对应 reply_id 的发送状态。消息记录已保留。')
-            try:
-                self.store.queue_reply(mid,text,reply_key='bridge_status_notice',notice=True,final=not waiting)
-                break
-            except BridgeError:
-                pass
+                text=('【桥接状态】这条来信已保存；检测到 DOT 尚未读取，仍在等待处理。'
+                      if waiting else '【桥接状态】这条来信的回复发送遇到了问题，请让原 dot 查询对应 reply_id 的发送状态。消息记录已保留。')
+                try:
+                    # Keep eligibility and queue admission under the same
+                    # reentrant store lock; a DOT read/reply must not overtake
+                    # an already checked waiting notice. No network I/O here.
+                    self.store.queue_reply(mid,text,reply_key='bridge_status_notice',notice=True,final=not waiting)
+                    break
+                except BridgeError:
+                    pass
 
 
 def restore(source,directory):
