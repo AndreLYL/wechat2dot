@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from wechat2dot.onboarding import new_file
 from wechat2dot.platform import private_directory
-from wechat2dot.runtime_guard import ensure_running, load_settings
+from wechat2dot.runtime_guard import ensure_running, load_settings, run
 
 
 class RuntimeGuardTests(unittest.TestCase):
@@ -42,6 +42,41 @@ class RuntimeGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'^runtime_response_invalid$'):
             ensure_running(self.settings(Path.cwd()),invoke)
         invoke.assert_called_once()
+
+    def test_failed_runtime_check_replaces_stale_healthy_heartbeat(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_directory(Path(temporary)/'private')
+            path = root/'guard.json'
+            new_file(root/'last-runtime-check.json', json.dumps({'ready':True,'checked_at':1}))
+            store = Mock()
+            store.get_status.return_value = {'bound':True,'enabled':True,
+                                            'diagnostics':{'healthy':True},'pending':2}
+            with patch('wechat2dot.runtime_guard.load_settings', return_value=(path,self.settings(root))), \
+                    patch('wechat2dot.runtime_guard.ensure_running', side_effect=ValueError('private-error')), \
+                    patch('wechat2dot.runtime_guard.load_config', return_value=(root,)), \
+                    patch('wechat_dot_bridge.store.Store', return_value=store):
+                result = run(path)
+            record = json.loads((root/'last-runtime-check.json').read_text())
+            self.assertFalse(result['ready'])
+            self.assertEqual(record['error'],'runtime_check_failed')
+            self.assertGreater(record['checked_at'],1)
+            self.assertNotIn('private-error', json.dumps(record))
+            store.close.assert_called_once()
+
+    def test_live_tunnel_does_not_hide_unbound_or_disabled_bridge(self):
+        for bound, enabled in ((False,True),(True,False)):
+            with self.subTest(bound=bound,enabled=enabled), tempfile.TemporaryDirectory() as temporary:
+                root = private_directory(Path(temporary)/'private')
+                store = Mock()
+                store.get_status.return_value = {'bound':bound,'enabled':enabled,
+                                                'diagnostics':{'healthy':True},'pending':0}
+                with patch('wechat2dot.runtime_guard.load_settings', return_value=(root/'guard.json',self.settings(root))), \
+                        patch('wechat2dot.runtime_guard.ensure_running', return_value={'ready':True}), \
+                        patch('wechat2dot.runtime_guard.load_config', return_value=(root,)), \
+                        patch('wechat_dot_bridge.store.Store', return_value=store):
+                    result = run(root/'guard.json')
+                self.assertFalse(result['ready'])
+                self.assertFalse(result['bridge_healthy'])
 
     def test_settings_are_private_and_cannot_supply_a_literal_key(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import time
 
@@ -86,17 +87,25 @@ def ensure_running(settings, invoke=_invoke):
 def run(path):
     path, settings = load_settings(path)
     with acquire_lock(path.parent / 'runtime-guard.lock'):
-        result = ensure_running(settings)
+        try:
+            result = ensure_running(settings)
+        except (ValueError, OSError):
+            result = {'action':'check_failed', 'error':'runtime_check_failed',
+                      'running':None, 'healthy':None, 'ready':False}
         from wechat_dot_bridge.store import Store
         args = engine_parser().parse_args(['--config', settings['bridge_config'], 'status'])
-        state, *_ = load_config(args)
-        store = Store(state)
+        store = None
         try:
+            state, *_ = load_config(args)
+            store = Store(state)
             status = store.get_status()
-            result.update(bridge_healthy=status['diagnostics']['healthy'], pending=status['pending'])
+            result.update(bridge_healthy=bool(status['bound'] and status['enabled'] and status['diagnostics']['healthy']), pending=status['pending'])
             result['ready'] = result['ready'] and result['bridge_healthy']
+        except (BridgeError, ValueError, OSError, sqlite3.Error):
+            result.update(bridge_healthy=False, ready=False, error='bridge_status_unavailable')
         finally:
-            store.close()
+            if store is not None:
+                store.close()
         record = path.parent / 'last-runtime-check.json'
         data = json.dumps({**result, 'checked_at': time.time()})
         if record.exists():
