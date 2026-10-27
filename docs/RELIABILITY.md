@@ -33,6 +33,8 @@ python -m wechat2dot.runtime_guard --settings /absolute/path/to/private/guard.js
 
 可将这个单次检查交给系统服务管理器定期执行：Windows 使用本人登录会话下的任务计划，Linux 使用本人 systemd timer，macOS 使用本人 LaunchAgent。每分钟检查一次，并阻止同一检查并发运行。主机关机、休眠、退出用户会话或凭据过期仍会影响服务；这不是云端全天候托管。
 
+Windows 任务的启动程序使用虚拟环境里的 `pythonw.exe`，参数为 `-m wechat2dot.runtime_guard --settings "绝对路径/guard.json"`，工作目录设为项目目录。守护检查会隐藏 Tunnel 客户端的控制台，让它启动的后续控制台进程继承隐藏状态。无需通过前台 PowerShell 或 CMD 包装任务，检查结果仍写入私人状态文件。
+
 ## 订阅与待办
 
 离线后让原 DOT 重新订阅 `weixin.message`，核对签名验证和有效订阅，再调用 `list_pending_weixin_messages` 检查尚未完成的来信。相同订阅恢复保留旧事件身份，只恢复未完成消息；完成的处理和已受理回复不重新播放。

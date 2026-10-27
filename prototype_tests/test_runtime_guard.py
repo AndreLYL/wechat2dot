@@ -1,17 +1,47 @@
 """Guard checks are operator-only and never replace a live network-waiting process."""
 
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from wechat2dot.onboarding import new_file
 from wechat2dot.platform import private_directory
-from wechat2dot.runtime_guard import ensure_running, load_settings, run
+from wechat2dot.runtime_guard import _invoke, ensure_running, load_settings, run
 
 
 class RuntimeGuardTests(unittest.TestCase):
+    def test_client_invocation_keeps_json_output_and_noninteractive_input(self):
+        result = _invoke([sys.executable, '-c',
+                          'import json,sys; print(json.dumps({"eof":sys.stdin.buffer.read(1)==b""}))'])
+        self.assertEqual(result, {'eof':True})
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows console behavior')
+    def test_client_and_its_console_child_have_no_visible_window(self):
+        probe = '''import ctypes,json
+def console_state():
+    k=ctypes.windll.kernel32
+    k.GetConsoleWindow.restype=ctypes.c_void_p
+    u=ctypes.windll.user32
+    u.IsWindowVisible.argtypes=[ctypes.c_void_p]
+    h=k.GetConsoleWindow()
+    return {"console":bool(h),"visible":bool(h and u.IsWindowVisible(h))}
+'''
+        # Both console programs use their normal executable and stdio. The
+        # second launch intentionally has no hiding flags of its own, matching
+        # the official managed-runtime launcher and MCP subprocess chain.
+        child = probe + '\nprint(json.dumps(console_state()))'
+        command = probe + f'''import subprocess,sys
+r=subprocess.run([sys.executable,"-c",{child!r}],capture_output=True,check=True)
+print(json.dumps({{"processes":[console_state(),json.loads(r.stdout)]}}))
+'''
+        result = _invoke([sys.executable, '-c', command])
+        self.assertEqual(result, {'processes':[{'console':True,'visible':False},
+                                             {'console':True,'visible':False}]})
+
     def settings(self, root):
         return {'alias':'fixture-runtime', 'profile_name':'fixture-runtime',
                 'tunnel_client':str(root/'client.exe'), 'profile_dir':str(root/'profiles'),
