@@ -39,7 +39,7 @@
 三个系统均执行：
 
 ```sh
-git clone https://github.com/AndreLYL/wechat2dot.git
+git clone --branch v0.2.0-alpha.2 --depth 1 https://github.com/AndreLYL/wechat2dot.git
 cd wechat2dot
 uv python install 3.11
 uv sync --frozen --extra setup --python 3.11
@@ -52,7 +52,7 @@ uv run wechat2dot doctor
 
 记录可执行文件的**完整路径**，例如 Windows 的 `C:\Tools\tunnel-client\tunnel-client.exe` 或 Linux/macOS 的 `/home/you/tools/tunnel-client`。示例路径必须换成自己的实际位置。Linux/macOS 如缺少执行权限，对该文件执行 `chmod u+x /实际路径/tunnel-client`。
 
-当前指南以 Git `main` 为准。旧 Alpha Release 包不一定包含后来合并的修复；请勿把不同版本的命令混用。Docker 用户另见[容器部署](docs/DOCKER.md)。
+本版为 **0.2.0 Alpha 2**（Python 版本号 `0.2.0a2`），安装命令固定到 `v0.2.0-alpha.2`。也可以下载该版本的完整源码发布包，解压后从 `uv python install` 继续；其中包含本指南、辅助脚本和锁定依赖。wheel 仅包含运行模块与许可证，不包含完整部署指南和脚本，首次接入推荐源码包。请使用[同版本发布说明](docs/RELEASE_ALPHA2.md)及包内文档；旧 Alpha 1 缺少后续修复，后续 main 也可能超前于本版。Docker 用户另见[容器部署](docs/DOCKER.md)。
 
 ## 3. 创建私人 Tunnel，并初始化本地配置
 
