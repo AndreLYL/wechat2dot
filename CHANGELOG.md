@@ -2,10 +2,12 @@
 
 ## Unreleased
 
+## 0.2.0a2 — 2026-10-31
+
 - Replaced the overview-only README with a complete first-run guide: prerequisites, credentials, QR binding, private plugin setup, callback verification, event subscription and visible WeChat acceptance.
 - Added copyable managed-runtime setup, Windows Task Scheduler settings, Linux systemd and macOS LaunchAgent examples, and maintenance/recovery instructions.
 - Updated the current validation status: one Windows deployment has passed text, image, CSV and WeChat-transcription-to-text checks. Raw-audio understanding, generated voice replies and live Linux/macOS validation remain unverified.
-- Includes the previously merged transient network recovery, waiting notice, runtime guard and hidden Windows console fixes. These changes are not in the older Alpha release assets below.
+- Includes the previously merged transient network recovery, waiting notice, runtime guard and hidden Windows console fixes. These changes were absent from 0.2.0a1 and are included in this release.
 
 ## 0.2.0a1
 

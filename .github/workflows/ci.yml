@@ -56,6 +56,27 @@ jobs:
       - run: uv run --frozen python scripts/check_source.py
       - run: uv run --frozen python -m build --no-isolation
       - run: uv run --frozen python scripts/check_package.py
+      - name: Fresh wheel installation and offline smoke test
+        run: |
+          uv venv --python '${{ matrix.python }}' wheel-smoke
+          if [ "$RUNNER_OS" = Windows ]; then
+            smoke_python=wheel-smoke/Scripts/python.exe
+            smoke_cli="$GITHUB_WORKSPACE/wheel-smoke/Scripts/wechat2dot.exe"
+          else
+            smoke_python=wheel-smoke/bin/python
+            smoke_cli="$GITHUB_WORKSPACE/wheel-smoke/bin/wechat2dot"
+          fi
+          uv pip install --python "$smoke_python" "$(find dist -name '*.whl')[setup]"
+          uv pip check --python "$smoke_python"
+          cd "$RUNNER_TEMP"
+          "$smoke_cli" doctor
+          "$smoke_cli" demo
+      - name: Preserve checked distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}-${{ matrix.python }}
+          path: dist/
+          if-no-files-found: error
   container:
     runs-on: ubuntu-latest
     steps:
@@ -69,3 +90,60 @@ jobs:
           docker run --rm --network none -v wechat2dot-ci:/data wechat2dot:ci init --directory /data
           docker run --rm --network none -v wechat2dot-ci:/data wechat2dot:ci doctor
           docker volume rm wechat2dot-ci
+
+  publish-alpha:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-alpha2]')
+    needs: [engine, container]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-ubuntu-24.04-3.11
+          path: dist
+      - name: Verify tag, source and checked assets
+        env:
+          RELEASE_TAG: v0.2.0-alpha.2
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          major, alpha = version.split('a')
+          assert os.environ['RELEASE_TAG'] == f'v{major}-alpha.{alpha}'
+          assert Path('docs/RELEASE_ALPHA2.md').is_file()
+          PYCODE
+          git merge-base --is-ancestor HEAD origin/main
+          python scripts/check_package.py
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Create and verify a new prerelease without replacing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: v0.2.0-alpha.2
+        run: |
+          set -euo pipefail
+          cp docs/RELEASE_ALPHA2.md "$RUNNER_TEMP/release-notes.md"
+          printf '\n本次发布提交 CI（全部必需任务通过后发布）：%s/%s/actions/runs/%s\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/release-notes.md"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" > /dev/null
+          gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease --latest=false \
+            --title "wechat2dot $RELEASE_TAG — 接入指南与运行可靠性" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$RELEASE_TAG" dist/*.whl dist/*.tar.gz dist/SHA256SUMS
+          mkdir "$RUNNER_TEMP/release-download"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/release-download"
+          (cd "$RUNNER_TEMP/release-download" && sha256sum -c SHA256SUMS)
+          cmp dist/SHA256SUMS "$RUNNER_TEMP/release-download/SHA256SUMS"
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false

@@ -23,3 +23,5 @@ weixin-login.json
 tunnel-client*
 /tunnel/
 .DS_Store
+
+wheel-smoke/

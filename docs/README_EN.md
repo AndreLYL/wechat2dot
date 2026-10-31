@@ -23,7 +23,7 @@ Your computer must stay awake and reach OpenAI, WeChat and media endpoints over 
 Run on any of the three systems:
 
 ```sh
-git clone https://github.com/AndreLYL/wechat2dot.git
+git clone --branch v0.2.0-alpha.2 --depth 1 https://github.com/AndreLYL/wechat2dot.git
 cd wechat2dot
 uv python install 3.11
 uv sync --frozen --extra setup --python 3.11
@@ -34,7 +34,7 @@ Expected: supported Python and no missing dependencies. Missing configuration an
 
 Download the matching OS/CPU package from the official [tunnel-client releases](https://github.com/openai/tunnel-client/releases), verify its published checksums and extract it to a permanent directory. Preserve required companion files. The commands below were checked against v0.0.16. Use the executable's absolute path; Linux/macOS may require `chmod u+x /actual/path/to/tunnel-client`.
 
-This guide follows Git `main`; older Alpha assets may not include later fixes. Optional: `uv run wechat2dot demo` runs a synthetic offline engine demonstration, not an account connection. Docker is documented [separately](DOCKER.md).
+This is **0.2.0 Alpha 2** (`0.2.0a2`), pinned to `v0.2.0-alpha.2`. For first setup, use the matching source distribution (with docs, scripts and uv.lock), extract it and continue at `uv python install`. The wheel contains runtime modules and licenses, not the full setup tree. Use the bundled docs and [release notes](RELEASE_ALPHA2.md); Alpha 1 lacks later fixes and future main may be ahead. Optional: `uv run wechat2dot demo` runs a synthetic offline engine demonstration, not an account connection. Docker is documented [separately](DOCKER.md).
 
 ## 3. Create the Tunnel and local configuration
 
