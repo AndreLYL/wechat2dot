@@ -78,7 +78,7 @@ class SDKReadTimingTests(unittest.TestCase):
                     with anyio.fail_after(2):
                         listed = await receive.receive()
                     self.assertEqual(listed.message.id, 2)
-                    self.assertEqual(len(listed.message.result['tools']), 11)
+                    self.assertEqual(len(listed.message.result['tools']), 14)
                     await anyio.sleep(.05)
                     self.now += 300  # A wall-clock jump while the worker is queued.
                     release.set()
