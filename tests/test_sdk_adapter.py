@@ -111,7 +111,7 @@ class SDKWireTests(unittest.TestCase):
                                   "capabilities": {}, "clientInfo": {"name": "fixture", "version": "1"}})["result"]
             self.assertEqual(result["protocolVersion"], version)
             self.assertIn("events", result["capabilities"])
-            self.assertEqual(len(self.request(process, "tools/list")["result"]["tools"]), 11)
+            self.assertEqual(len(self.request(process, "tools/list")["result"]["tools"]), 14)
             self.assertIn("events", self.request(process, "events/list")["result"])
             self.finish(process)
 
@@ -176,7 +176,7 @@ class SDKWireTests(unittest.TestCase):
                         args=["-c", CHILD, str(Path(self.directory.name) / "sdk-client")], cwd=ROOT)
             async with Client(params, read_timeout_seconds=5) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools.tools), 11)
+                self.assertEqual(len(tools.tools), 14)
                 result = await client.call_tool("get_weixin_status")
                 self.assertFalse(result.is_error)
                 self.assertFalse(result.structured_content["bound"])

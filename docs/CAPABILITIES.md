@@ -15,7 +15,8 @@
 | 任意生成文件导出 | text_content、字节分块、可访问 HTTPS | 内部 sandbox 路径不能直接读取 |
 | 取消本地处理 / 恢复待办 | 处理租期和待办列表 | 不等同于停止平台正在执行的任务 |
 | 审批、验证码、账号登录、电脑接管 | 未实现微信中的原生控制 | 需要回 DOT 完成 |
-| 群聊 / 新联系人 / 多租户 / 主动推送 | 未实现；本人已有来信路由 | 不支持 |
+| DOT 主动文字通知（源码版本） | 独立通知队列；本人路由、本地授权、去重、过期、暂停、免打扰；[配置](NOTIFICATIONS.md) | 新接口未做真人验收；不承诺长期无新来信仍可达；Alpha 2 发布包不含 |
+| 群聊 / 新联系人 / 多租户 | 未实现；仅本人已有来信路由 | 不支持 |
 | 全量历史 / 微信语音通话 | 未实现 | 不支持 |
 
 单次暂存最多 1 MiB，附件总上限 20 MiB；文本文件可直接 `text_content`。图片读取返回预览；视频传输不代表视频理解。未安装可选 Node/SILK/FFmpeg 时，相关音频用文件回退；Markdown 可退回纯文本。
@@ -25,3 +26,5 @@
 事件只携带不透明消息 ID，DOT 通过私人 MCP 工具取正文。`queued` 表示已入队，`accepted` 表示腾讯接口受理，两者都不是用户看到了消息的证明。不确定的发送不自动重试。
 
 MCP 暴露以下工具：`get_weixin_status`、`read_weixin_message`、`reply_weixin_message`、`report_weixin_progress`、`get_weixin_send_status`、`list_pending_weixin_messages`、`read_weixin_attachment`、`stage_weixin_attachment`、`import_weixin_attachment`、`reply_weixin_attachment`、`retry_weixin_operation`。
+
+含主动通知的源码版本另增：`send_weixin_notification`、`get_weixin_notification_status`、`set_weixin_notifications_paused`，共 14 个工具。

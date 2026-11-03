@@ -204,8 +204,30 @@ def _events(db, clock):
     db.execute("CREATE TABLE IF NOT EXISTS event_metadata (key TEXT PRIMARY KEY,value TEXT)")
 
 
+def _notifications(db, clock):
+    db.execute("""CREATE TABLE IF NOT EXISTS notification_policy (
+        account TEXT NOT NULL, peer TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
+        paused INTEGER NOT NULL DEFAULT 0, quiet_start TEXT, quiet_end TEXT,
+        utc_offset_minutes INTEGER NOT NULL DEFAULT 480, PRIMARY KEY(account,peer))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS notification_routes (
+        account TEXT NOT NULL, peer TEXT NOT NULL, context_id TEXT NOT NULL,
+        context_token TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(account,peer))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS notifications (
+        id TEXT PRIMARY KEY, account TEXT NOT NULL, peer TEXT NOT NULL,
+        digest TEXT NOT NULL, text TEXT NOT NULL, created_at REAL NOT NULL,
+        expires_at REAL NOT NULL, status TEXT NOT NULL, error TEXT,
+        context_id TEXT, attempts INTEGER NOT NULL DEFAULT 0)""")
+    db.execute("CREATE INDEX IF NOT EXISTS notification_dispatch ON notifications(account,peer,status,created_at)")
+    for account, owner in db.execute("SELECT id,owner FROM binding").fetchall():
+        context = db.execute("""SELECT id,context_token,created_at FROM messages WHERE account=? AND peer=?
+            AND context_token IS NOT NULL ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+            (account, owner)).fetchone()
+        if context:
+            db.execute("INSERT OR IGNORE INTO notification_routes VALUES(?,?,?,?,?)", (account, owner, *context))
+
+
 MIGRATIONS = (_core, _inbound_quotes, _media, _outbound, _timing, _retired_messages,
-              _processing_lifecycle, _events)
+              _processing_lifecycle, _events, _notifications)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

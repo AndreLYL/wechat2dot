@@ -103,7 +103,15 @@ class MCPServer:
             else:
                 if not self.store.get_binding():
                     raise BridgeError("binding_required")
-                if name == "import_weixin_attachment":
+                if name == "send_weixin_notification":
+                    value = self.store.queue_notification(arguments["text"], arguments["notification_key"], arguments["expires_at"])
+                    self._wake("send")
+                elif name == "get_weixin_notification_status":
+                    value = self.store.notification_status(arguments.get("notification_id"))
+                elif name == "set_weixin_notifications_paused":
+                    value = self.store.set_notifications_paused(arguments["paused"])
+                    self._wake("send")
+                elif name == "import_weixin_attachment":
                     from .artifacts import download,stage_bytes
                     kind=arguments.get("kind","auto")
                     if kind not in ("auto","image","file","video","voice") or not isinstance(arguments["name"],str) or len(arguments["name"])>128:

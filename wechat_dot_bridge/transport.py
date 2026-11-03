@@ -531,20 +531,29 @@ class WeixinWorker:
         binding = self.store.get_binding()
         if not binding or not binding.get("enabled"):
             return False
-        reply = self.store.claim_send()
+        # Share one paced sender; alternate queues so neither can starve the other.
+        notification_first = getattr(self, "_notification_first", False)
+        claimers = (self.store.claim_notification, self.store.claim_send) if notification_first else (self.store.claim_send, self.store.claim_notification)
+        reply = claimers[0]() or claimers[1]()
         if reply is None:
             return False
-        message_id = reply["message_id"]
+        self._notification_first = "notification_id" not in reply
+
+        def finish(status, error=None):
+            if "notification_id" in reply:
+                self.store.finish_notification(reply["notification_id"], status, error)
+            else:
+                self.store.finish_send(reply["message_id"], status, error, reply_id=reply.get("reply_id"))
         try:
             response = self.client.send(binding, reply)
             error = _application_error(response, sendmessage=True)
             if error:
                 status = error if error in ("auth_required", "context_required") else (
                     "uncertain" if error == "response_invalid" else "failed")
-                self.store.finish_send(message_id, status, error, reply_id=reply.get("reply_id"))
+                finish(status, error)
                 self._record_error(error, stale=response.get("ret") == -14 or response.get("errcode") == -14)
             else:
-                self.store.finish_send(message_id, "accepted", reply_id=reply.get("reply_id"))
+                finish("accepted")
                 if response.get("message_id") and hasattr(self.store, "remember_sent_quote"):
                     try:
                         self.store.remember_sent_quote(str(response["message_id"]), reply)
@@ -554,10 +563,10 @@ class WeixinWorker:
         except BridgeError as error:
             status = error.code if error.code in ("auth_required", "context_required") else (
                 "failed" if error.code in ("endpoint_rejected", "dns_rejected", "binding_invalid", "invalid_reply", "rate_limited") or error.code.startswith("media_") else "uncertain")
-            self.store.finish_send(message_id, status, error.code, reply_id=reply.get("reply_id"))
+            finish(status, error.code)
             self._record_error(error.code)
         except (UnicodeError, ValueError, TypeError, OverflowError):
-            self.store.finish_send(message_id, "uncertain", "response_invalid", reply_id=reply.get("reply_id"))
+            finish("uncertain", "response_invalid")
             self._record_error("response_invalid")
         return True
 
