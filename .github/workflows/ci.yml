@@ -38,6 +38,8 @@ jobs:
       - run: uv sync --frozen --all-extras --python '${{ matrix.python }}'
       - run: uv run --frozen ruff check .
       - run: npm ci --ignore-scripts --prefix wechat_dot_bridge/codecs
+      - name: Owner notifications on every OS
+        run: uv run --frozen python -m unittest discover -s tests -p test_notifications.py -v
       - name: Full POSIX regression and upgrade
         if: runner.os != 'Windows'
         run: |

@@ -54,6 +54,9 @@ class FakeStore:
     def ingest(self, account, messages, cursor):
         self.ingests.append((account, messages, cursor))
 
+    def claim_notification(self):
+        return None
+
     def claim_send(self):
         reply, self.reply = self.reply, None
         return reply

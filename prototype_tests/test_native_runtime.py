@@ -178,7 +178,7 @@ class NativeRuntimeTests(unittest.TestCase):
             process.stdin.flush()
             self.assertEqual(json.loads(responses.get(timeout=15))["error"]["code"], -32700)
             listed = request({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-            self.assertEqual(len(listed["result"]["tools"]), 11)
+            self.assertEqual(len(listed["result"]["tools"]), 14)
             process.stdin.close()
             process.wait(timeout=15)
             self.assertEqual(process.returncode, 0, process.stderr.read())

@@ -37,6 +37,10 @@ def diagnostics(store, threshold=300):
             AND r.status IN ('failed','uncertain','context_required','auth_required')
             AND m.account=? AND m.peer=? ORDER BY r.rowid DESC LIMIT 50""", scope):
             issues.append(dict(message_id=row['message_id'],code='reply_'+row['status'],error=row['error']))
+        for row in store.db.execute("""SELECT id,status,error FROM notifications WHERE account=? AND peer=?
+            AND status IN ('failed','uncertain','context_required','auth_required')
+            AND (status!='context_required' OR expires_at>?) ORDER BY rowid DESC LIMIT 20""", (*scope, now)):
+            issues.append(dict(notification_id=row['id'],code='notification_'+row['status'],error=row['error']))
         if binding and binding['last_error']:
             issues.append(dict(code='channel_error',error=binding['last_error']))
         if binding and not any(s['status']=='active' and (s['refresh_before'] is None or s['refresh_before']>now) for s in subscriptions(store)):

@@ -9,7 +9,7 @@ import sys
 
 from . import __version__
 
-ENGINE_COMMANDS = {"serve", "status", "diagnose", "pause", "resume", "subscriptions", "queue", "latency",
+ENGINE_COMMANDS = {"serve", "status", "diagnose", "pause", "resume", "subscriptions", "queue", "latency", "notifications",
                    "storage", "import-binding", "login-start", "login-poll", "backup", "restore-backup",
                    "retry-send", "retry-attachment", "resolve-send", "cancel-subscription", "subscription-forever",
                    "cleanup-history", "backup-managed"}

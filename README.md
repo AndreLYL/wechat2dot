@@ -150,7 +150,7 @@ uv run wechat2dot --config ./runtime/bridge.json login-poll --verification-code
 | Authentication / 认证 | 本项目是私人 stdio 服务，无额外应用层认证，选择对应的无认证选项；访问控制由私人 Tunnel 和插件权限承担 |
 | 访问范围 | 仅本人可用，核对组织与工作区授权，不发布或共享这个连接 |
 
-阅读页面提示后创建插件，确认发现 **11 个 `weixin` 工具**，再把插件添加到你现有的 DOT。菜单名称可能随产品更新，官方步骤见[连接插件](https://developers.openai.com/plugins/deploy/connect-chatgpt)。
+阅读页面提示后创建插件，确认发现 **11 个 `weixin` 工具**（Alpha 2 发布版；含主动通知的源码版本为 **14 个**），再把插件添加到你现有的 DOT。菜单名称可能随产品更新，官方步骤见[连接插件](https://developers.openai.com/plugins/deploy/connect-chatgpt)。
 
 在该 DOT 里发送：
 
@@ -222,6 +222,10 @@ uv run wechat2dot --config ./runtime/bridge.json resume --confirm-single-consume
 4. 关闭联调终端后，重新从手机发送一条新标记的任务，确认仍然收到回复。
 
 Windows 的后台任务使用 `pythonw.exe`，避免定期弹出 PowerShell/控制台窗口。后台运行不会让关机、休眠或已过期的凭据继续工作。
+
+### 可选：让 DOT 定时主动通知本人
+
+含主动通知的源码版本新增独立通知接口，支持持久化去重、截止时间、暂停和免打扰；默认关闭，先由本机操作者授权。DOT 负责定时执行，桥接只负责向已绑定本人发送文字，不必借用旧聊天任务。配置步骤、任务示例和发送状态见[主动通知指南](docs/NOTIFICATIONS.md)。Alpha 2 发布包不含此功能；长期无新来信的可达性仍需实测。
 
 <a id="troubleshooting"></a>
 ## 出问题时，从这里排查

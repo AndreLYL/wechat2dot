@@ -268,6 +268,13 @@ def parser():
     commands.add_parser("serve", help="Start the private stdio MCP server")
     commands.add_parser("status", help="Read redacted local status")
     commands.add_parser("pause", help="Disable WeChat polling and sending")
+    notifications = commands.add_parser("notifications", help="Read policy, or configure owner notifications with the service stopped")
+    choice = notifications.add_mutually_exclusive_group()
+    choice.add_argument("--enable", action="store_true")
+    choice.add_argument("--disable", action="store_true")
+    notifications.add_argument("--quiet-start", help="HH:MM; pair with --quiet-end. Omit both to clear quiet hours when configuring.")
+    notifications.add_argument("--quiet-end", help="HH:MM in the configured fixed UTC offset")
+    notifications.add_argument("--utc-offset-minutes", type=int, default=480)
     commands.add_parser("subscription-forever", help="Keep the current owner subscription until cancellation; stop the service first")
     commands.add_parser("diagnose", help="Show redacted health and stuck work")
     commands.add_parser("subscriptions", help="List subscription IDs and lifetime, without callback credentials")
@@ -334,12 +341,20 @@ def main(argv=None):
                             code = getpass.getpass("Weixin verification code (hidden): ")
                     result = poll_login(state, verify_code=code)
                 print(canonical(result))
-        elif args.command in ("import-binding", "resume", "pause", "subscription-forever", "cancel-subscription", "retry-send", "retry-attachment", "backup", "resolve-send", "cleanup-history", "backup-managed"):
+        elif args.command in ("import-binding", "resume", "pause", "subscription-forever", "cancel-subscription", "retry-send", "retry-attachment", "backup", "resolve-send", "cleanup-history", "backup-managed", "notifications"):
             # Configuration changes must not race a running tunnel child.
             with acquire_lock(state / "worker.lock"):
                 store = Store(state)
                 store.maintenance_policy = args.maintenance_policy
-                if args.command == "cleanup-history":
+                if args.command == "notifications":
+                    if args.enable or args.disable:
+                        result = store.configure_notifications(enabled=args.enable, quiet_start=args.quiet_start,
+                            quiet_end=args.quiet_end, utc_offset_minutes=args.utc_offset_minutes)
+                    else:
+                        if args.quiet_start is not None or args.quiet_end is not None or args.utc_offset_minutes != 480:
+                            raise BridgeError("notification_enable_or_disable_required")
+                        result = store.notification_status()
+                elif args.command == "cleanup-history":
                     from .maintenance import cleanup_history
                     result = cleanup_history(store, days=args.days, apply=args.apply)
                 elif args.command == "backup-managed":

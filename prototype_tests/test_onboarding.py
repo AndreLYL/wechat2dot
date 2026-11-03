@@ -60,7 +60,7 @@ class OnboardingTests(unittest.TestCase):
         result = preview()
         self.assertEqual(result["mode"], "protocol_preview")
         self.assertEqual(result["engine_e2e"], "not_run")
-        self.assertEqual(len(result["tools"]), 11)
+        self.assertEqual(len(result["tools"]), 14)
         self.assertFalse(result["real_dot_connected"])
 
     def test_live_engine_requires_config_on_every_platform(self):

@@ -44,7 +44,7 @@ from wechat_dot_bridge.operations import restore
 adapter = SDKAdapter(SimpleNamespace())
 listed = adapter.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})
 assert {tool['name'] for tool in listed['result']['tools']} == {tool['name'] for tool in tool_definitions()}
-assert len(listed['result']['tools']) == 11
+assert len(listed['result']['tools']) == 14
 assert _bridge_error(BridgeError('fixture-private://must-not-escape')).data == {'reason': 'internal_error'}
 assert adapter.handle({'jsonrpc': '2.0', 'id': 2, 'method': 'fixture-private://unknown'})['error']['message'] == 'Method not found'
 with tempfile.TemporaryDirectory() as directory:

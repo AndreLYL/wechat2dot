@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from .errors import BridgeError
 from .migrations import migrate
 from .lifecycle import WorkStore
+from .notifications import NotificationStore
 from .private_paths import _private_database_file, _private_directory
 
 
@@ -80,7 +81,7 @@ from .attachment_store import AttachmentStore, MEDIA_ERRORS
 SAFE_ERRORS = SAFE_ERRORS | MEDIA_ERRORS
 
 
-class Store(AttachmentStore, WorkStore):
+class Store(AttachmentStore, WorkStore, NotificationStore):
     def __init__(self, state_dir, clock=time.time):
         self.directory = _private_directory(state_dir)
         self.state_dir = self.directory
@@ -147,7 +148,7 @@ class Store(AttachmentStore, WorkStore):
 
     def _latest_context(self, binding):
         return self.db.execute(
-            "SELECT id,context_token FROM messages "
+            "SELECT id,context_token,created_at FROM messages "
             "WHERE account=? AND peer=? AND context_token IS NOT NULL "
             "ORDER BY created_at DESC,rowid DESC LIMIT 1",
             (binding["id"], binding["owner"])).fetchone()
@@ -363,6 +364,8 @@ class Store(AttachmentStore, WorkStore):
                     "AND message_id IN (SELECT id FROM messages WHERE account=? AND peer=?)",
                     (latest_context["id"], binding["id"], binding["owner"]))
             self.db.execute("UPDATE binding SET cursor=?,last_error=NULL WHERE id=?", (cursor, binding["id"]))
+            if latest_context and latest_context["id"] in new_ids:
+                self._save_notification_context(binding, latest_context)
         # A best-effort presence hook receives identifiers only after the whole
         # batch and cursor commit. Failure cannot turn a committed poll into a
         # failed receive, and duplicates/tombstones never reach the hook.
@@ -599,6 +602,8 @@ class Store(AttachmentStore, WorkStore):
         with self._transaction():
             binding = self.db.execute("SELECT id,owner FROM binding LIMIT 1").fetchone()
             if binding:
+                self.db.execute("UPDATE notifications SET status='uncertain',error='restart_during_send' "
+                                "WHERE status='sending' AND account=? AND peer=?", (binding["id"], binding["owner"]))
                 self.db.execute(
                     "UPDATE replies SET status='uncertain',error='restart_during_send' WHERE status='sending' "
                     "AND message_id IN (SELECT id FROM messages WHERE account=? AND peer=?)",
@@ -673,6 +678,8 @@ class Store(AttachmentStore, WorkStore):
             result = {"bound": bool(binding), "enabled": bool(binding and binding["enabled"]),
                       "account_status": binding["status"] if binding else "not_bound",
                       "pending": pending, "reply_status": counts, "active_subscriptions": active}
+            if binding:
+                result["notifications"] = self.notification_status()
             scope = (binding['id'], binding['owner']) if binding else ('', '')
             result["processing_status"] = {r[0]: r[1] for r in self.db.execute("""SELECT
                 CASE WHEN w.state='active' AND COALESCE(w.lease_until,0)<=? THEN 'interrupted' ELSE w.state END AS effective_state,
