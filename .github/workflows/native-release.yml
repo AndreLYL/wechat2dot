@@ -1,0 +1,107 @@
+name: Publish native bridge
+on:
+  push:
+    tags: ['v[2-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tested version tag (vX.Y.Z)
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.24'
+      - run: npm ci --ignore-scripts --prefix wechat_dot_bridge/codecs
+      - run: uv sync --frozen --extra setup
+      - name: Check release version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: test "v$(uv run wechat2dot --version)" = "$TAG"
+      - run: uv run python -m unittest discover -s tests
+      - run: uv run python -m unittest discover -s prototype_tests
+      - run: uv run python -m build --no-isolation && uv run python scripts/check_package.py && uv run python scripts/brew_formula.py dist/*.tar.gz > wechat2dot.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/
+            wechat2dot.rb
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - name: Publish versioned container and release files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build -t "ghcr.io/andrelyl/wechat2dot:${TAG#v}" .
+          docker push "ghcr.io/andrelyl/wechat2dot:${TAG#v}"
+          case "$TAG" in
+            *a[0-9]*|*b[0-9]*|*rc[0-9]*) release_flags="--prerelease --latest=false" ;;
+            *) release_flags="" ;;
+          esac
+          gh release view "$TAG" >/dev/null || gh release create "$TAG" --verify-tag --generate-notes $release_flags
+          gh release upload "$TAG" dist/* wechat2dot.rb
+  pypi:
+    if: vars.PUBLISH_PYPI == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - uses: pypa/gh-action-pypi-publish@release/v1
+  tap:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'Tap maintainer can publish the verified wechat2dot.rb from the release.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh auth setup-git
+          gh repo clone AndreLYL/homebrew-tap tap
+          mkdir -p tap/Formula
+          cp wechat2dot.rb tap/Formula/wechat2dot.rb
+          git -C tap config user.name github-actions
+          git -C tap config user.email github-actions@users.noreply.github.com
+          git -C tap add Formula/wechat2dot.rb
+          git -C tap diff --cached --quiet || git -C tap commit -m 'Update wechat2dot release'
+          git -C tap push

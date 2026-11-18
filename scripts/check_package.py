@@ -45,7 +45,7 @@ def inspect(directory):
             raise ValueError('Wheel dependencies differ from project dependencies')
         for folder in ('wechat2dot', 'wechat_dot_bridge'):
             for path in (root / folder).rglob('*'):
-                if path.is_file() and 'node_modules' not in path.parts and path.suffix in {'.py', '.mjs', '.ts', '.json'}:
+                if path.is_file() and 'node_modules' not in path.parts and path.suffix in {'.py', '.mjs', '.ts', '.json', '.swift'}:
                     relative = path.relative_to(root).as_posix()
                     if package.read(relative) != path.read_bytes():
                         raise ValueError('Missing or stale runtime file: ' + relative)
@@ -70,18 +70,18 @@ def inspect(directory):
             if name not in wheel_names:
                 raise ValueError("Missing runtime resource: " + name)
         for notice in ("LICENSE", "NOTICE.txt", "upstream-bridge-MIT.txt",
-                       "Tencent-openclaw-weixin-MIT.txt", "silk-wasm-MIT.txt"):
+                       "Tencent-openclaw-weixin-MIT.txt", "silk-wasm-MIT.txt", "wecom-dot-bridge-MIT.txt"):
             if not any(name.endswith("/" + notice) for name in wheel_names):
                 raise ValueError("Missing notice: " + notice)
     with tarfile.open(sources[0]) as package:
         source_names = package.getnames()
         prefix = f'wechat2dot-{version}/'
         source_paths = [root / name for name in ('pyproject.toml', 'uv.lock', 'README.md', 'CHANGELOG.md',
-                                                 'LICENSE', 'NOTICE.txt', 'MANIFEST.in')]
+                                                 'LICENSE', 'NOTICE.txt', 'MANIFEST.in', 'Dockerfile', 'compose.yaml', 'compose.official.yaml', 'install.sh', 'install.ps1')]
         source_paths += list((root / 'docs').glob('*.md')) + list((root / 'licenses').glob('*.txt'))
         for folder in ('wechat2dot', 'wechat_dot_bridge', 'tests', 'prototype_tests', 'scripts'):
             source_paths += [p for p in (root / folder).rglob('*') if p.is_file()
-                             and 'node_modules' not in p.parts and p.suffix in {'.py', '.mjs', '.ts', '.json', '.sh'}]
+                             and 'node_modules' not in p.parts and p.suffix in {'.py', '.mjs', '.ts', '.json', '.sh', '.swift'}]
         for path in source_paths:
             member = prefix + path.relative_to(root).as_posix()
             if package.extractfile(member).read() != path.read_bytes():

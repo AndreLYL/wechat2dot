@@ -38,6 +38,10 @@ jobs:
       - run: uv sync --frozen --all-extras --python '${{ matrix.python }}'
       - run: uv run --frozen ruff check .
       - run: npm ci --ignore-scripts --prefix wechat_dot_bridge/codecs
+      - name: Native bridge contracts and delivery on every OS
+        run: |
+          uv run --frozen python -m unittest discover -s tests -p 'test_native_*.py'
+          uv run --frozen python -m unittest discover -s tests -p 'test_dot_native.py'
       - name: Owner notifications on every OS
         run: uv run --frozen python -m unittest discover -s tests -p test_notifications.py -v
       - name: Full POSIX regression and upgrade
@@ -88,6 +92,8 @@ jobs:
       - run: docker run --rm --network none wechat2dot:ci demo
       - name: Named-volume setup without credentials
         run: |
+          docker run --rm --network none wechat2dot:ci status --json
+          docker compose -f compose.official.yaml config --quiet
           docker volume create wechat2dot-ci
           docker run --rm --network none -v wechat2dot-ci:/data wechat2dot:ci init --directory /data
           docker run --rm --network none -v wechat2dot-ci:/data wechat2dot:ci doctor

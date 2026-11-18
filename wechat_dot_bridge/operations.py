@@ -4,6 +4,7 @@ import os
 import sqlite3
 from pathlib import Path
 from .errors import BridgeError
+from .send_recovery import recovery_fields
 from wechat2dot.platform import safe_open, check_private_path, reject_links
 
 
@@ -32,15 +33,17 @@ def diagnostics(store, threshold=300):
             AND NOT (w.state='active' AND COALESCE(w.lease_until,0)>?)
             ORDER BY m.rowid DESC LIMIT 50""", (now-threshold,*scope,now)):
             issues.append(dict(message_id=row['id'],code='processing_stalled' if row['was_read'] else 'message_unread',age_seconds=int(now-row['created_at'])))
-        for row in store.db.execute("""SELECT r.message_id,r.status,r.error FROM replies r
+        for row in store.db.execute("""SELECT r.message_id,r.status,r.error,r.last_rejection FROM replies r
             JOIN messages m ON m.id=r.message_id WHERE r.is_notice=0
             AND r.status IN ('failed','uncertain','context_required','auth_required')
             AND m.account=? AND m.peer=? ORDER BY r.rowid DESC LIMIT 50""", scope):
-            issues.append(dict(message_id=row['message_id'],code='reply_'+row['status'],error=row['error']))
-        for row in store.db.execute("""SELECT id,status,error FROM notifications WHERE account=? AND peer=?
+            issues.append(dict(message_id=row['message_id'],code='reply_'+row['status'],error=row['error'],
+                               **(recovery_fields(row) if row['last_rejection'] else {})))
+        for row in store.db.execute("""SELECT id,status,error,last_rejection FROM notifications WHERE account=? AND peer=?
             AND status IN ('failed','uncertain','context_required','auth_required')
             AND (status!='context_required' OR expires_at>?) ORDER BY rowid DESC LIMIT 20""", (*scope, now)):
-            issues.append(dict(notification_id=row['id'],code='notification_'+row['status'],error=row['error']))
+            issues.append(dict(notification_id=row['id'],code='notification_'+row['status'],error=row['error'],
+                               **(recovery_fields(row) if row['last_rejection'] else {})))
         if binding and binding['last_error']:
             issues.append(dict(code='channel_error',error=binding['last_error']))
         if binding and not any(s['status']=='active' and (s['refresh_before'] is None or s['refresh_before']>now) for s in subscriptions(store)):
@@ -48,7 +51,8 @@ def diagnostics(store, threshold=300):
         from .maintenance import storage_status
         storage = storage_status(store)
         issues.extend({'code': code} for code in storage['warnings'])
-        return {'healthy':not issues,'issues':issues}
+        return {'healthy':not issues, 'issues':issues,
+                'send_backoff_until': binding['send_retry_at'] if binding and binding['send_retry_at'] > now else None}
 
 
 def backup(store, destination):
@@ -103,7 +107,7 @@ class HealthMonitor:
             # Respect the channel's explicit flood-control response: another
             # status message would only add pressure to the same rate limit.
             # This failure remains visible in diagnostics and send status.
-            if item.get('error') == 'rate_limited':
+            if item.get('error') in {'rate_limited', 'http_rate_limited', 'possible_context_expired', 'context_required', 'retry_limit'}:
                 continue
             with self.store.lock:
                 message=self.store.db.execute('SELECT created_at FROM messages WHERE id=?',(mid,)).fetchone()
@@ -111,7 +115,7 @@ class HealthMonitor:
                     continue
                 # A historical different failure for this message must not
                 # bypass the rate-limit guard on a more recent failed reply.
-                if self.store.db.execute("SELECT 1 FROM replies WHERE message_id=? AND is_notice=0 AND status='failed' AND error='rate_limited'", (mid,)).fetchone():
+                if self.store.db.execute("SELECT 1 FROM replies WHERE message_id=? AND is_notice=0 AND status='failed' AND error IN ('rate_limited','http_rate_limited','possible_context_expired','retry_limit')", (mid,)).fetchone():
                     continue
                 # At most one notice per inbound message, persisted across restarts.
                 if self.store.db.execute('SELECT 1 FROM replies WHERE message_id=? AND is_notice=1',(mid,)).fetchone():

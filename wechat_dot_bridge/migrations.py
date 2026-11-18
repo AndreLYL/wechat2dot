@@ -226,8 +226,17 @@ def _notifications(db, clock):
             db.execute("INSERT OR IGNORE INTO notification_routes VALUES(?,?,?,?,?)", (account, owner, *context))
 
 
+def _send_recovery(db, clock):
+    if "send_retry_at" not in _columns(db, "binding"):
+        db.execute("ALTER TABLE binding ADD COLUMN send_retry_at REAL NOT NULL DEFAULT 0")
+    for table in ("replies", "notifications"):
+        for column in ("last_rejection", "context_hash"):
+            if column not in _columns(db, table):
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+
+
 MIGRATIONS = (_core, _inbound_quotes, _media, _outbound, _timing, _retired_messages,
-              _processing_lifecycle, _events, _notifications)
+              _processing_lifecycle, _events, _notifications, _send_recovery)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

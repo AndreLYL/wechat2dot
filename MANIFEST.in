@@ -7,3 +7,6 @@ include Dockerfile compose.yaml .dockerignore
 recursive-include licenses *.txt
 recursive-include wechat_dot_bridge/codecs *.mjs *.ts *.json
 prune wechat_dot_bridge/codecs/node_modules
+
+include install.sh install.ps1 compose.official.yaml
+recursive-include wechat2dot *.swift

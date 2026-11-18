@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from .errors import BridgeError
 from .migrations import migrate
 from .lifecycle import WorkStore
+from .send_recovery import recovery_fields, record_rejection, token_digest
 from .notifications import NotificationStore
 from .private_paths import _private_database_file, _private_directory
 
@@ -37,7 +38,7 @@ SAFE_ERRORS = frozenset({
     "api_http_error", "invalid_api_response", "invalid_api_json",
     "response_too_large", "api_response_too_large", "poll_rejected",
     "send_rejected", "rate_limited", "restart_during_send",
-    "invalid_send_response", "invalid_send_status", "invalid_destination",
+    "possible_context_expired", "http_rate_limited", "invalid_send_response", "invalid_send_status", "invalid_destination",
     "invalid_api_destination", "non_public_api_address", "http_error",
     "operation_failed", "account_disabled", "context_expired", "retry_limit",
     "endpoint_rejected", "dns_rejected", "response_invalid", "binding_invalid",
@@ -82,6 +83,8 @@ SAFE_ERRORS = SAFE_ERRORS | MEDIA_ERRORS
 
 
 class Store(AttachmentStore, WorkStore, NotificationStore):
+    work_queue_limit = MAX_PENDING
+
     def __init__(self, state_dir, clock=time.time):
         self.directory = _private_directory(state_dir)
         self.state_dir = self.directory
@@ -280,9 +283,11 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             if not binding["enabled"] or binding["status"] != "ready":
                 raise BridgeError("account_disabled")
             previous_context = self._latest_context(binding)
-            count = self.db.execute(
-                "SELECT count(*) FROM messages m JOIN message_work w ON w.message_id=m.id WHERE account=? AND peer=? AND w.state!='completed'",
-                (binding["id"], binding["owner"])).fetchone()[0]
+            count = 0
+            if self.work_queue_limit is not None:
+                count = self.db.execute(
+                    "SELECT count(*) FROM messages m JOIN message_work w ON w.message_id=m.id WHERE account=? AND peer=? AND w.state!='completed'",
+                    (binding["id"], binding["owner"])).fetchone()[0]
             added = 0
             for source, peer, text, created_at, context, refs, quotes, aliases,received_at in normalized:
                 if peer != binding["owner"]:
@@ -292,7 +297,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                                    "SELECT 1 FROM retired_messages WHERE id=? LIMIT 1",
                                    (identifier, identifier)).fetchone():
                     continue
-                if count + added >= MAX_PENDING:
+                if self.work_queue_limit is not None and count + added >= self.work_queue_limit:
                     raise BridgeError("inbox_full")
                 from .message_format import partial_quote
                 cached_aids, quote_states = [], []
@@ -360,9 +365,9 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             if latest_context and (previous_context is None or latest_context["id"] != previous_context["id"]):
                 self.db.execute(
                     "UPDATE replies SET status='queued',error=NULL WHERE status='context_required' AND attempts<3 "
-                    "AND (context_id IS NULL OR context_id!=?) "
+                    "AND (context_id IS NULL OR context_id!=?) AND (context_hash IS NULL OR context_hash!=?) "
                     "AND message_id IN (SELECT id FROM messages WHERE account=? AND peer=?)",
-                    (latest_context["id"], binding["id"], binding["owner"]))
+                    (latest_context["id"], token_digest(latest_context["context_token"]), binding["id"], binding["owner"]))
             self.db.execute("UPDATE binding SET cursor=?,last_error=NULL WHERE id=?", (cursor, binding["id"]))
             if latest_context and latest_context["id"] in new_ids:
                 self._save_notification_context(binding, latest_context)
@@ -504,9 +509,9 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
         with self.lock:
             self._message(message_id, self._binding())
             if reply_id is None:
-                reply = self.db.execute("SELECT client_id,status,error FROM replies WHERE message_id=? AND is_notice=0 ORDER BY rowid DESC LIMIT 1", (message_id,)).fetchone()
+                reply = self.db.execute("SELECT client_id,status,error,last_rejection FROM replies WHERE message_id=? AND is_notice=0 ORDER BY rowid DESC LIMIT 1", (message_id,)).fetchone()
             else:
-                reply = self.db.execute("SELECT client_id,status,error FROM replies WHERE message_id=? AND client_id=?", (message_id, reply_id)).fetchone()
+                reply = self.db.execute("SELECT client_id,status,error,last_rejection FROM replies WHERE message_id=? AND client_id=?", (message_id, reply_id)).fetchone()
                 if reply is None:
                     raise BridgeError("unknown_reply")
             result = {"message_id": message_id, "status": reply["status"] if reply else "no_reply", "delivered": None}
@@ -515,6 +520,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                 result['work'] = self._work_value(work)
             if reply:
                 result["reply_id"] = reply["client_id"]
+                result.update(recovery_fields(reply))
             if reply:
                 parts = self.db.execute("SELECT count(*),COALESCE(SUM(accepted),0) FROM reply_parts WHERE reply_id=?", (reply["client_id"],)).fetchone()
                 if parts[0] > 1:
@@ -526,7 +532,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
     def claim_send(self):
         with self._transaction():
             binding = self.db.execute("SELECT * FROM binding LIMIT 1").fetchone()
-            if not binding or not binding["enabled"] or binding["status"] != "ready":
+            if not binding or not binding["enabled"] or binding["status"] != "ready" or binding["send_retry_at"] > self.clock():
                 return None
             row = self.db.execute(
                 "SELECT r.*,m.peer FROM replies r JOIN messages m ON m.id=r.message_id "
@@ -544,8 +550,8 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                     (row["client_id"],))
                 return None
             self.db.execute(
-                "UPDATE replies SET status='sending',error=NULL,context_id=?,attempts=attempts+1 WHERE client_id=?",
-                (context["id"], row["client_id"]))
+                "UPDATE replies SET status='sending',error=NULL,context_id=?,context_hash=?,attempts=attempts+1 WHERE client_id=?",
+                (context["id"], token_digest(context["context_token"]), row["client_id"]))
             part = self.db.execute("SELECT part,text,kind FROM reply_parts WHERE reply_id=? AND accepted=0 ORDER BY part LIMIT 1", (row["client_id"],)).fetchone()
             remaining = self.db.execute("SELECT count(*) FROM reply_parts WHERE reply_id=? AND accepted=0", (row["client_id"],)).fetchone()[0]
             if not row["is_notice"]:
@@ -553,10 +559,10 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                 trace(self,row["message_id"],"send_start",reply_id=row["client_id"])
             return {"message_id": row["message_id"], "reply_id": row["client_id"], "text": part["text"] if part else row["text"],
                     "client_id": row["client_id"] + ("_part_" + str(part["part"]) if part and part["part"] else ""), "peer": row["peer"],
-                    "context_token": context["context_token"],
+                    "context_token": context["context_token"], "context_age_seconds": max(0, int(self.clock() - context["created_at"])),
                     **({"attachment": self.read_attachment(row["attachment_id"])} if row["attachment_id"] and (not part or part["kind"] == "media") else {})}
 
-    def finish_send(self, message_id, status, error=None, reply_id=None):
+    def finish_send(self, message_id, status, error=None, reply_id=None, *, evidence=None):
         if not isinstance(status, str) or status not in SEND_OUTCOMES:
             raise BridgeError("invalid_send_outcome")
         diagnostic = None if error is None else _safe_error(error)
@@ -564,15 +570,19 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             binding = self._binding()
             self._message(message_id, binding)
             if reply_id is None:
-                reply = self.db.execute("SELECT client_id,status,error,context_id,attempts FROM replies WHERE message_id=? ORDER BY (status='sending') DESC,rowid DESC LIMIT 1", (message_id,)).fetchone()
+                reply = self.db.execute("SELECT client_id,status,error,context_id,context_hash,attempts FROM replies WHERE message_id=? ORDER BY (status='sending') DESC,rowid DESC LIMIT 1", (message_id,)).fetchone()
             else:
-                reply = self.db.execute("SELECT client_id,status,error,context_id,attempts FROM replies WHERE message_id=? AND client_id=?", (message_id, reply_id)).fetchone()
+                reply = self.db.execute("SELECT client_id,status,error,context_id,context_hash,attempts FROM replies WHERE message_id=? AND client_id=?", (message_id, reply_id)).fetchone()
             if reply is None:
                 raise BridgeError("reply_not_committed")
             if reply["status"] != "sending":
                 if reply["status"] == status and reply["error"] == diagnostic:
                     return
                 raise BridgeError("reply_not_sending")
+            if evidence is not None:
+                record_rejection(self, reply, notification=False, evidence=evidence)
+            if error == "http_rate_limited" and evidence and evidence["http_status"] == 429:
+                status = "queued" if reply["attempts"] < 3 else "failed"
             if not self.db.execute("SELECT is_notice FROM replies WHERE client_id=?",(reply["client_id"],)).fetchone()[0]:
                 from .timing import record as trace
                 trace(self,message_id,"weixin_accepted" if status=="accepted" else "send_result",outcome=status,reply_id=reply["client_id"])
@@ -582,7 +592,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                 context = self._latest_context(binding)
                 if reply["attempts"] >= 3:
                     status, diagnostic = "failed", "retry_limit"
-                elif context and context["id"] != reply["context_id"]:
+                elif context and context["id"] != reply["context_id"] and token_digest(context["context_token"]) != reply["context_hash"]:
                     status, diagnostic = "queued", None
             if status == "accepted":
                 part = self.db.execute("SELECT part FROM reply_parts WHERE reply_id=? AND accepted=0 ORDER BY part LIMIT 1", (reply["client_id"],)).fetchone()
