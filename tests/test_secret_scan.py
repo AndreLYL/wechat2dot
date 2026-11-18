@@ -98,7 +98,8 @@ class SecretScanTests(unittest.TestCase):
 
     def test_literal_webhook_wechat_and_url_credentials_are_detected_without_values(self):
         github = "ghp_" + secrets.token_hex(20)
-        webhook = "whsec_" + base64.b64encode(secrets.token_bytes(32)).decode()
+        binary_signing_key = b"<" + bytes(range(224, 255))
+        webhook = "whsec_" + base64.b64encode(binary_signing_key).decode()
         wechat = secrets.token_urlsafe(32)
         password = secrets.token_urlsafe(24)
         text = ("a=" + repr(github) + "\nsecret=" + repr(webhook)
