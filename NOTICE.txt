@@ -14,3 +14,7 @@ distribution notices; FFmpeg is optional and is not bundled in this repository.
 OpenAI tunnel-client is a separate user-supplied official binary and is not
 bundled here. wechat2dot is an independent community project, not an official
 OpenAI or Tencent product.
+
+Native room protocol shapes and interoperability references: Johnnybyzhang/wecom-dot-bridge
+(MIT, see licenses/wecom-dot-bridge-MIT.txt) and beeper/chatgpt-dots (architecture
+and wire-format reference only). No Beeper source is incorporated.

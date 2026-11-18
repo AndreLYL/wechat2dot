@@ -20,20 +20,31 @@ def main(argv=None):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="wechat2dot", description="Use WeChat to reach your existing dot.", add_help=False)
+    from .admin import COMMANDS, execute
+    parser.add_argument("--home", help="native private data directory")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", default=os.environ.get("WECHAT2DOT_CONFIG"))
-    parser.add_argument("command", choices=["init", "doctor", "demo", "save-key", "allow-callback", "login", *sorted(ENGINE_COMMANDS)])
+    parser.add_argument("command", choices=["init", "doctor", "demo", "save-key", "allow-callback", "login",
+                                            "dot-login", "dot-probe", *sorted(COMMANDS), *sorted(ENGINE_COMMANDS)])
     argv = sys.argv[1:] if argv is None else list(argv)
     if not argv or argv[0] in {"--help", "-h"}:
         parser.print_help()
-        print("Use COMMAND --help for command-specific arguments. Live operations require --config.")
+        print("Use setup to connect a primary DOT. Legacy official commands use --config PATH.")
         return 0
     args, remaining = parser.parse_known_args(argv)
-    if args.command in {"doctor", "login"} and remaining in (["--help"], ["-h"]):
+    if args.home:
+        os.environ["WECHAT2DOT_HOME"] = str(Path(args.home).absolute())
+    if args.config and args.command in {"doctor", "login"} and remaining in (["--help"], ["-h"]):
         print("doctor: offline checks only; login: interactive private WeChat QR binding. Use --config PATH before the command.")
         return 0
     try:
-        if args.command in ENGINE_COMMANDS:
+        if args.command in COMMANDS or (not args.config and args.command in {"doctor","login","status"}):
+            if args.command=="official" and args.config:
+                remaining=["--config",args.config,*remaining]
+            result=execute(args.command,remaining)
+            if isinstance(result,int):
+                return result
+        elif args.command in ENGINE_COMMANDS:
             if not args.config and "--help" not in remaining:
                 raise ValueError("config_required")
             if args.config and "--help" not in remaining:
@@ -42,7 +53,7 @@ def main(argv=None):
             from wechat_dot_bridge.cli import main as engine
             prefix = ["--config", args.config] if args.config else []
             return engine([*prefix, args.command, *remaining])
-        if args.command == "doctor":
+        elif args.command == "doctor":
             if remaining:
                 parser.error("doctor does not accept extra arguments")
             from .onboarding import diagnose
@@ -86,6 +97,24 @@ def main(argv=None):
             values = command.parse_args(remaining)
             from .onboarding import approve_callback
             result = approve_callback(args.config, values.hostname)
+        elif args.command == "dot-login":
+            command = argparse.ArgumentParser(prog="wechat2dot dot-login")
+            command.add_argument("--no-browser", action="store_true")
+            values = command.parse_args(remaining)
+            import asyncio
+            from .dot.probe import login
+            result = asyncio.run(login(open_browser=not values.no_browser))
+        elif args.command == "dot-probe":
+            command = argparse.ArgumentParser(prog="wechat2dot dot-probe")
+            command.add_argument("--dot-id")
+            command.add_argument("--limit", type=int, default=20)
+            command.add_argument("--post", help="Post this text to the dot room as you")
+            command.add_argument("--listen", type=int, default=0, help="Seconds to watch the live socket")
+            command.add_argument("--show-text", action="store_true")
+            values = command.parse_args(remaining)
+            import asyncio
+            from .dot.probe import probe
+            result = asyncio.run(probe(values.dot_id, values.limit, values.post, values.listen, values.show_text))
         else:
             if remaining:
                 parser.error("login does not accept extra arguments; use login-poll --verification-code if requested")
@@ -94,6 +123,9 @@ def main(argv=None):
             result = _login(args.config)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    except BlockingIOError:
+        print(json.dumps({"error":"already_running","hint":"Stop the existing consumer before migration or setup."}),file=sys.stderr)
+        return 2
     except (ValueError, OSError) as error:
         category = str(error) if isinstance(error, ValueError) and str(error).replace("_", "").isalnum() else "local_operation_failed"
         print(json.dumps({"error": category}), file=sys.stderr)

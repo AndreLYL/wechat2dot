@@ -16,3 +16,8 @@
 !wechat_dot_bridge/codecs/*.mjs
 !wechat_dot_bridge/codecs/*.ts
 !wechat_dot_bridge/codecs/*.json
+!wechat2dot/*.swift
+!wechat2dot/dot/
+!wechat2dot/dot/*.py
+!wechat2dot/sync/
+!wechat2dot/sync/*.py

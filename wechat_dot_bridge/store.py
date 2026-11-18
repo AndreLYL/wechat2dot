@@ -83,6 +83,8 @@ SAFE_ERRORS = SAFE_ERRORS | MEDIA_ERRORS
 
 
 class Store(AttachmentStore, WorkStore, NotificationStore):
+    work_queue_limit = MAX_PENDING
+
     def __init__(self, state_dir, clock=time.time):
         self.directory = _private_directory(state_dir)
         self.state_dir = self.directory
@@ -281,9 +283,11 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             if not binding["enabled"] or binding["status"] != "ready":
                 raise BridgeError("account_disabled")
             previous_context = self._latest_context(binding)
-            count = self.db.execute(
-                "SELECT count(*) FROM messages m JOIN message_work w ON w.message_id=m.id WHERE account=? AND peer=? AND w.state!='completed'",
-                (binding["id"], binding["owner"])).fetchone()[0]
+            count = 0
+            if self.work_queue_limit is not None:
+                count = self.db.execute(
+                    "SELECT count(*) FROM messages m JOIN message_work w ON w.message_id=m.id WHERE account=? AND peer=? AND w.state!='completed'",
+                    (binding["id"], binding["owner"])).fetchone()[0]
             added = 0
             for source, peer, text, created_at, context, refs, quotes, aliases,received_at in normalized:
                 if peer != binding["owner"]:
@@ -293,7 +297,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                                    "SELECT 1 FROM retired_messages WHERE id=? LIMIT 1",
                                    (identifier, identifier)).fetchone():
                     continue
-                if count + added >= MAX_PENDING:
+                if self.work_queue_limit is not None and count + added >= self.work_queue_limit:
                     raise BridgeError("inbox_full")
                 from .message_format import partial_quote
                 cached_aids, quote_states = [], []

@@ -1,6 +1,7 @@
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12-slim
+FROM ${PYTHON_IMAGE}
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
-    UV_LINK_MODE=copy WECHAT2DOT_CONFIG=/data/bridge.json
+    UV_LINK_MODE=copy WECHAT2DOT_HOME=/data
 WORKDIR /app
 RUN python -m pip install --no-cache-dir uv==0.12.24
 COPY pyproject.toml uv.lock README.md LICENSE NOTICE.txt MANIFEST.in ./
@@ -13,4 +14,4 @@ RUN uv sync --frozen --no-dev --extra setup \
     && chown bridge:bridge /data
 USER 10001:10001
 ENTRYPOINT ["/app/.venv/bin/wechat2dot"]
-CMD ["doctor"]
+CMD ["run"]
