@@ -10,6 +10,7 @@ import json
 import re
 
 from .errors import BridgeError
+from .send_recovery import record_rejection, recovery_fields, token_digest
 
 
 MAX_NOTIFICATION_CHARS = 2000
@@ -80,7 +81,10 @@ class NotificationStore:
         status = row["status"]
         if status in WAITING and row["expires_at"] <= self.clock():
             status = "expired"
-        return {"notification_id": row["id"], "status": status, "delivered": None,
+        details = recovery_fields(row)
+        if status == "expired":
+            details["recovery_action"] = "expired_no_replay"
+        return {**details, "notification_id": row["id"], "status": status, "delivered": None,
                 "created_at": row["created_at"], "expires_at": row["expires_at"],
                 "attempts": row["attempts"], "error": "notification_expired" if status == "expired" else row["error"]}
 
@@ -150,7 +154,7 @@ class NotificationStore:
             self._expire_notifications(now)
             b = self._binding()
             p = self._notification_policy(b)
-            if not b["enabled"] or b["status"] != "ready" or not p["enabled"] or p["paused"]:
+            if not b["enabled"] or b["status"] != "ready" or b["send_retry_at"] > now or not p["enabled"] or p["paused"]:
                 return None
             if p["quiet_start"] is not None:
                 start, end = minute(p["quiet_start"]), minute(p["quiet_end"])
@@ -161,9 +165,11 @@ class NotificationStore:
             context = self._notification_context(b)
             # A context-rejected head must not block unrelated queued notifications.
             row = self.db.execute("""SELECT * FROM notifications WHERE account=? AND peer=? AND
-                (status='queued' OR (status='context_required' AND COALESCE(context_id,'')!=?))
+                (status='queued' OR (status='context_required' AND COALESCE(context_id,'')!=?
+                       AND (context_hash IS NULL OR context_hash!=?)))
                 ORDER BY created_at,rowid LIMIT 1""",
-                (b["id"], b["owner"], context["context_id"] if context else "")).fetchone()
+                (b["id"], b["owner"], context["context_id"] if context else "",
+                 token_digest(context["context_token"]) if context else "")).fetchone()
             if row is None:
                 return None
             if context is None:
@@ -172,12 +178,13 @@ class NotificationStore:
             if row["attempts"] >= 3:
                 self.db.execute("UPDATE notifications SET status='failed',error='retry_limit' WHERE id=?", (row["id"],))
                 return None
-            self.db.execute("UPDATE notifications SET status='sending',error=NULL,context_id=?,attempts=attempts+1 WHERE id=?",
-                            (context["context_id"], row["id"]))
+            self.db.execute("UPDATE notifications SET status='sending',error=NULL,context_id=?,context_hash=?,attempts=attempts+1 WHERE id=?",
+                            (context["context_id"], token_digest(context["context_token"]), row["id"]))
             return {"notification_id": row["id"], "client_id": row["id"], "peer": b["owner"],
-                    "text": row["text"], "context_token": context["context_token"]}
+                    "text": row["text"], "context_token": context["context_token"],
+                    "context_age_seconds": max(0, int(now - context["created_at"]))}
 
-    def finish_notification(self, notification_id, status, error=None):
+    def finish_notification(self, notification_id, status, error=None, *, evidence=None):
         from .store import SEND_OUTCOMES, _safe_error
         if status not in SEND_OUTCOMES:
             raise BridgeError("invalid_send_outcome")
@@ -187,6 +194,12 @@ class NotificationStore:
                                   (notification_id, b["id"], b["owner"])).fetchone()
             if row is None or row["status"] != "sending":
                 raise BridgeError("notification_not_sending")
+            if evidence is not None:
+                record_rejection(self, row, notification=True, evidence=evidence)
+            if error == "http_rate_limited" and evidence and evidence["http_status"] == 429:
+                status = "queued" if row["attempts"] < 3 else "failed"
+            if status == "context_required" and row["attempts"] >= 3:
+                status, error = "failed", "retry_limit"
             self.db.execute("UPDATE notifications SET status=?,error=? WHERE id=?",
                             (status, _safe_error(error) if error else None, notification_id))
             if status == "auth_required":

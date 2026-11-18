@@ -2,7 +2,7 @@
 
 **Send tasks to your existing OpenAI DOT from WeChat and receive progress, images and result files.**
 
-Windows, Linux and macOS run natively. [中文完整指南](../README.md) · [Capabilities](CAPABILITIES.md) · [Background operation](RELIABILITY.md)
+Windows, Linux and macOS run natively. [中文首页](../README.md) · [中文逐步安装](GETTING_STARTED.md) · [Capabilities](CAPABILITIES.md) · [Background operation](RELIABILITY.md)
 
 **Alpha:** one private Windows deployment has passed live text/progress, image recognition and image return, CSV processing/file return, and WeChat-provided voice transcription followed by text replies. Raw-audio understanding, generated voice replies and live Linux/macOS deployment remain unverified. See [validation](VALIDATION.md).
 
@@ -20,7 +20,7 @@ Your computer must stay awake and reach OpenAI, WeChat and media endpoints over 
 
 ## 2. Install
 
-Run on any of the three systems:
+For ordinary WeChat tasks, use the Alpha 2 release below. If you also need scheduled outbound notifications on a **new installation**, replace the shallow clone with `git clone https://github.com/AndreLYL/wechat2dot.git` and, immediately after `cd wechat2dot`, run `git checkout --detach 1615d6ab14fe7afd895c9610796239b381373e93`. Continue with the same Python and uv commands. See the [notification guide](NOTIFICATIONS.md) after the phone reply test.
 
 ```sh
 git clone --branch v0.2.0-alpha.2 --depth 1 https://github.com/AndreLYL/wechat2dot.git

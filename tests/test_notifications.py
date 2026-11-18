@@ -188,6 +188,39 @@ class NotificationTests(unittest.TestCase):
             self.assertEqual(self.store.notification_status(item["notification_id"])["status"], expected)
             self.assertFalse(self.worker.send_once())
 
+    def test_context_recovery_requires_a_different_token_and_preserves_send_identity(self):
+        self.incoming()
+        self.enable()
+        self.now += 62 * 3600
+        notice = self.queue()
+        self.client.response = {"ret": -2, "errmsg": "private upstream detail"}
+        self.assertTrue(self.worker.send_once())
+        status = self.store.notification_status(notice["notification_id"])
+        self.assertEqual(status["last_rejection"], {"http_status": 200, "ret": -2, "context_age_seconds": 62 * 3600})
+        self.assertNotIn("private upstream", json.dumps(status))
+        self.store.close()
+        self.store = Store(self.path, clock=lambda: self.now)
+        self.store.recover_inflight()
+        self.worker = WeixinWorker(self.store, self.client)
+        self.incoming("same-token")
+        self.assertFalse(self.worker.send_once())
+        self.incoming("new-token", "fresh-context")
+        self.client.response = {"ret": 0}
+        self.assertTrue(self.worker.send_once())
+        self.assertFalse(self.worker.send_once())
+        self.assertEqual(self.store.notification_status(notice["notification_id"])["status"], "accepted")
+        self.assertEqual([p["msg"]["client_id"] for p in self.client.posts], [notice["notification_id"]] * 2)
+
+    def test_contradictory_send_ack_is_uncertain_even_after_new_context(self):
+        self.incoming()
+        self.enable()
+        notice = self.queue()
+        self.client.response = {"ret": -2, "message_id": "fixture-ack"}
+        self.worker.send_once()
+        self.incoming("fresh", "different")
+        self.assertFalse(self.worker.send_once())
+        self.assertEqual(self.store.notification_status(notice["notification_id"])["status"], "uncertain")
+
     def test_notification_auth_failure_stops_sending_and_is_visible(self):
         self.incoming()
         self.enable()
@@ -299,7 +332,7 @@ class NotificationTests(unittest.TestCase):
         self.worker.send_once()
         self.assertEqual(self.client.posts[0]["msg"]["context_token"], "new-context")
 
-    def test_context_retries_are_bounded_and_rate_limit_is_not_context_failure(self):
+    def test_context_retries_are_bounded_and_minus_two_is_labeled_possible(self):
         self.incoming()
         self.enable()
         item = self.queue()
@@ -316,7 +349,7 @@ class NotificationTests(unittest.TestCase):
         rate = self.queue("rate")
         self.client.response = {"ret": -2}
         self.worker.send_once()
-        self.assertEqual(self.store.notification_status(rate["notification_id"])["error"], "rate_limited")
+        self.assertEqual(self.store.notification_status(rate["notification_id"])["error"], "possible_context_expired")
         from wechat_dot_bridge.operations import diagnostics
         self.assertTrue(any(i["code"] == "notification_failed" for i in diagnostics(self.store)["issues"]))
 
@@ -383,19 +416,41 @@ class NotificationTests(unittest.TestCase):
         status = self.tool("get_weixin_notification_status", notification_id=nid)
         self.assertNotIn("private fixture", json.dumps(status))
 
+    def test_schema9_terminal_notifications_never_become_automatic_retries(self):
+        state = Path(self.temp.name).resolve() / "v9-state"
+        with patch.object(migrations, "MIGRATIONS", migrations.MIGRATIONS[:9]), patch.object(migrations, "SCHEMA_VERSION", 9):
+            old = Store(state, clock=lambda: self.now)
+        old.import_binding({"id":"fixture-account", "owner":"fixture-owner", "token":"fixture-token",
+                            "base_url":"https://ilinkai.weixin.qq.com"})
+        old.set_enabled(True)
+        for status, error in (("failed", "rate_limited"), ("uncertain", "network_timeout"), ("accepted", None)):
+            old.db.execute("""INSERT INTO notifications(id,account,peer,digest,text,created_at,expires_at,status,error)
+                              VALUES(?,'fixture-account','fixture-owner','fixture','',?,?,?,?)""",
+                           (status, self.now, self.now + 600, status, error))
+        old.close()
+        with closing(Store(state, clock=lambda: self.now)) as upgraded:
+            upgraded.configure_notifications(enabled=True)
+            upgraded.ingest("fixture-account", [{"source_id":"fresh","peer":"fixture-owner",
+                            "created_at":self.now,"text":"fixture", "context_token":"fresh-context"}], "next")
+            upgraded.recover_inflight()
+            self.assertIsNone(upgraded.claim_notification())
+            for status in ("failed", "uncertain", "accepted"):
+                self.assertEqual(upgraded.notification_status(status)["status"], status)
+            self.assertEqual(upgraded.notification_status("failed")["recovery_action"], "legacy_cause_unknown")
+
     def test_migration_seeds_only_owner_route_and_rolls_back_atomically(self):
         database = sqlite3.connect(":memory:", isolation_level=None)
         self.addCleanup(database.close)
-        with patch.object(migrations, "MIGRATIONS", migrations.MIGRATIONS[:-1]), patch.object(migrations, "SCHEMA_VERSION", migrations.SCHEMA_VERSION-1):
+        with patch.object(migrations, "MIGRATIONS", migrations.MIGRATIONS[:8]), patch.object(migrations, "SCHEMA_VERSION", 8):
             migrations.migrate(database, clock=lambda: self.now)
         database.execute("INSERT INTO binding(id,owner,token,base_url) VALUES('a','owner','fixture','https://ilinkai.weixin.qq.com')")
         database.execute("INSERT INTO messages(id,account,peer,source_id,text,created_at,context_token) VALUES('m','a','owner','s','fixture',1,'owner-context')")
         database.execute("INSERT INTO messages(id,account,peer,source_id,text,created_at,context_token) VALUES('x','a','outsider','x','fixture',2,'foreign-context')")
-        original = migrations.MIGRATIONS[-1]
+        original = migrations.MIGRATIONS[8]
         def fail(db, clock):
             original(db, clock)
             raise RuntimeError("fixture")
-        with patch.object(migrations, "MIGRATIONS", (*migrations.MIGRATIONS[:-1], fail)), self.assertRaises(RuntimeError):
+        with patch.object(migrations, "MIGRATIONS", (*migrations.MIGRATIONS[:8], fail)), self.assertRaises(RuntimeError):
             migrations.migrate(database)
         self.assertIsNone(database.execute("SELECT name FROM sqlite_master WHERE name='notifications'").fetchone())
         migrations.migrate(database)

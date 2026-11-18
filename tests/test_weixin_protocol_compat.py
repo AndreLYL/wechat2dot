@@ -131,8 +131,7 @@ class WeixinProtocolCompatTests(unittest.TestCase):
                 self.assertIsNone(_normalize_message(value, self.binding, self.now))
         self.assertIsNone(_normalize_message(self.inbound(1, [{'type': 1, 'text_item': {}}]), self.binding, self.now))
 
-    def test_sendmessage_ret_minus_two_cools_down_without_errmsg_or_extra_notice(self):
-        # CC weixin.go:861 uses ret=-2, independent of errmsg language/content.
+    def test_minus_two_waits_for_context_without_global_cooldown_or_extra_notice(self):
         variants = [{}, {'errmsg': ''}, {'errmsg': 'synthetic alternative'},
                     {'errmsg': '限流'}, {'errmsg': 'prepare failed'}, {'errmsg': 'PREPARE FAILED'}]
         mids, replies = self.queue_pair()
@@ -149,9 +148,9 @@ class WeixinProtocolCompatTests(unittest.TestCase):
                     self.network({'ret': -2, **fields}) as (tls, factory):
                 self.assertTrue(worker.send_once())
                 result = self.store.send_status(mids[0], replies[0]['reply_id'])
-                self.assertEqual((result['status'], result['error']), ('failed', 'rate_limited'))
-                self.assertEqual(worker.send_after, 130.0)
-                self.assertFalse(worker.send_once())
+                self.assertEqual((result['status'], result['error']), ('context_required', 'possible_context_expired'))
+                self.assertEqual(worker.send_after, 0)
+                self.assertEqual(result['last_rejection']['ret'], -2)
                 HealthMonitor(self.store).tick()
                 self.assertEqual(self.store.db.execute('SELECT count(*) FROM replies WHERE is_notice=1').fetchone()[0], 0)
                 factory.assert_called_once()
@@ -162,7 +161,7 @@ class WeixinProtocolCompatTests(unittest.TestCase):
             self.store = Store(self.state, clock=lambda: self.now)
             self.store.recover_inflight()
             self.assertEqual(self.store.db.execute('SELECT status,attempts FROM replies WHERE client_id=?',
-                                                  (replies[0]['reply_id'],)).fetchone()[:], ('failed', 1))
+                                                  (replies[0]['reply_id'],)).fetchone()[:], ('context_required', 1))
 
     def test_unconfirmed_ret_minus_two_meaning_is_not_applied_to_other_endpoints(self):
         with self.network({'ret': -2}):

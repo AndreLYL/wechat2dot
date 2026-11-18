@@ -17,6 +17,7 @@ import time
 import tomllib
 from urllib.parse import urlsplit
 
+from .send_recovery import retry_delay
 from .errors import BridgeError
 from .net_transport import DNS_SLOTS, NetworkFailure, PinnedRequest, presence_stop, resolve_addresses
 
@@ -184,7 +185,16 @@ class IlinkClient:
             with self.connection_lock:
                 self.connections.add(connection)
             response = connection.execute("POST", path, encoded, headers, MAX_RESPONSE_BYTES, {200})
-            return self._response(response, allow_empty, void_ack=path == "/ilink/bot/sendtyping")
+            if path == "/ilink/bot/sendmessage" and response.status == 429:
+                error = BridgeError("http_rate_limited")
+                error.retry_delay = retry_delay(response.header("retry-after"), self.clock())
+                raise error
+            try:
+                return self._response(response, allow_empty, void_ack=path == "/ilink/bot/sendtyping")
+            except BridgeError as error:
+                if path == "/ilink/bot/sendmessage":
+                    error.http_status = response.status
+                raise
         except BridgeError:
             raise
         except NetworkFailure as error:
@@ -305,11 +315,14 @@ def _application_error(response: dict, *, sendmessage=False) -> str | None:
         codes.append(value)
     if -14 in codes:
         return "auth_required"
-    # cc-connect dfad194 weixin.go:861 classifies sendmessage ret=-2 by
-    # the code alone. Other endpoints do not share that documented meaning.
-    if sendmessage and response.get("ret") == -2:
-        return "rate_limited"
-    if -2 in codes and "prepare failed" in str(response.get("errmsg", "")).lower():
+    if sendmessage and any(code != 0 for code in codes):
+        # A contradictory success identifier makes a replay unsafe.
+        if response.get("message_id"):
+            return "response_invalid"
+        if response.get("ret") == -2 or (
+                response.get("errcode") == -2 and "prepare failed" in str(response.get("errmsg", "")).lower()):
+            return "possible_context_expired"
+    if not sendmessage and -2 in codes and "prepare failed" in str(response.get("errmsg", "")).lower():
         return "rate_limited"
     if any(code != 0 for code in codes):
         # No inferred undocumented error-code mapping. A named context-token
@@ -539,35 +552,51 @@ class WeixinWorker:
             return False
         self._notification_first = "notification_id" not in reply
 
-        def finish(status, error=None):
+        def finish(status, error=None, **kwargs):
             if "notification_id" in reply:
-                self.store.finish_notification(reply["notification_id"], status, error)
+                self.store.finish_notification(reply["notification_id"], status, error, **kwargs)
             else:
-                self.store.finish_send(reply["message_id"], status, error, reply_id=reply.get("reply_id"))
+                self.store.finish_send(reply["message_id"], status, error, reply_id=reply.get("reply_id"), **kwargs)
+        age = reply.get("context_age_seconds")
         try:
             response = self.client.send(binding, reply)
-            error = _application_error(response, sendmessage=True)
-            if error:
-                status = error if error in ("auth_required", "context_required") else (
-                    "uncertain" if error == "response_invalid" else "failed")
-                finish(status, error)
-                self._record_error(error, stale=response.get("ret") == -14 or response.get("errcode") == -14)
-            else:
-                finish("accepted")
-                if response.get("message_id") and hasattr(self.store, "remember_sent_quote"):
-                    try:
-                        self.store.remember_sent_quote(str(response["message_id"]), reply)
-                    except BridgeError:
-                        pass  # Quote cache cannot change an accepted send result.
-                self.store.record_error(None)
         except BridgeError as error:
-            status = error.code if error.code in ("auth_required", "context_required") else (
-                "failed" if error.code in ("endpoint_rejected", "dns_rejected", "binding_invalid", "invalid_reply", "rate_limited") or error.code.startswith("media_") else "uncertain")
-            finish(status, error.code)
+            if error.code == "http_rate_limited":
+                finish("failed", error.code, evidence={"http_status": 429,
+                       "retry_delay": error.retry_delay, "context_age_seconds": age})
+            else:
+                status = error.code if error.code in ("auth_required", "context_required") else (
+                    "failed" if error.code in ("endpoint_rejected", "dns_rejected", "binding_invalid", "invalid_reply", "rate_limited") or error.code.startswith("media_") else "uncertain")
+                details = {"evidence": {"http_status": error.http_status, "context_age_seconds": age}} if hasattr(error, "http_status") else {}
+                finish(status, error.code, **details)
             self._record_error(error.code)
+            return True
         except (UnicodeError, ValueError, TypeError, OverflowError):
             finish("uncertain", "response_invalid")
             self._record_error("response_invalid")
+            return True
+
+        error = _application_error(response, sendmessage=True)
+        if error:
+            status = {"auth_required": "auth_required", "context_required": "context_required",
+                      "possible_context_expired": "context_required", "response_invalid": "uncertain"}.get(error, "failed")
+            evidence = {"http_status": 200, "context_age_seconds": age}
+            if isinstance(response, dict):
+                for key in ("ret", "errcode"):
+                    value = response.get(key)
+                    if type(value) is int and -(2**31) <= value < 2**31:
+                        evidence[key] = value
+            finish(status, error, evidence=evidence)
+            self._record_error(error, stale=isinstance(response, dict) and
+                               (response.get("ret") == -14 or response.get("errcode") == -14))
+        else:
+            finish("accepted")
+            if response.get("message_id") and hasattr(self.store, "remember_sent_quote"):
+                try:
+                    self.store.remember_sent_quote(str(response["message_id"]), reply)
+                except BridgeError:
+                    pass  # Quote cache cannot change an accepted send result.
+            self.store.record_error(None)
         return True
 
 
