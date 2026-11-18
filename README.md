@@ -6,7 +6,21 @@
 
 ## 第一次使用
 
-这份说明对应 **2.0.0a2 源码候选版**。从含有 `install.sh` 和 `wechat2dot/dot` 的这份检出目录运行。需要能持续在线的电脑、本人微信可绑定的 ClawBot，以及已经在 ChatGPT 打开过的 DOT 主对话。
+**2.0.0a2 是预发布版。** macOS / Linux 可从终端直接安装：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/AndreLYL/wechat2dot/main/install.sh | sh
+```
+
+Windows PowerShell 可下载并运行同一仓库的安装程序：
+
+```powershell
+$installer = Join-Path $env:TEMP 'wechat2dot-install.ps1'
+Invoke-WebRequest 'https://raw.githubusercontent.com/AndreLYL/wechat2dot/main/install.ps1' -OutFile $installer
+& $installer
+```
+
+安装程序使用 GitHub Release 的固定版本 wheel。已有源码检出时，也可使用下表中的本地命令。需要能持续在线的电脑、本人微信可绑定的 ClawBot，以及已经在 ChatGPT 打开过的 DOT 主对话。
 
 | 系统 | 在仓库目录执行 |
 | --- | --- |

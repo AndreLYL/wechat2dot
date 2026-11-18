@@ -2,9 +2,9 @@
 
 Use your own WeChat conversation as a second client for your primary DOT room. A reply started on your phone, a follow-up on your Mac and a scheduled update written to that room all enter the same delivery queue. A message you send from WeChat appears in that room under your account.
 
-## Try the 2.0.0a2 source candidate
+## Install the 2.0.0a2 prerelease
 
-From a checkout containing the native bridge, run `sh ./install.sh` on macOS/Linux or `.\install.ps1` in Windows PowerShell. With uv installed, `uv run --frozen wechat2dot setup` also works.
+Install with `curl -fsSL https://raw.githubusercontent.com/AndreLYL/wechat2dot/main/install.sh | sh` on macOS/Linux. The installer fetches the versioned wheel from GitHub Releases. From a checkout containing the native bridge, run `sh ./install.sh` on macOS/Linux or `.\install.ps1` in Windows PowerShell. With uv installed, `uv run --frozen wechat2dot setup` also works.
 
 1. Scan the private QR with the WeChat account you want to bind.
 2. Sign into the ChatGPT account containing your existing DOT via the device-code page. If required, enable device-code login under ChatGPT security settings. Select the DOT if several exist.
