@@ -54,8 +54,13 @@ def encoded_fixture(value):
         decoded = base64.b64decode(value, validate=True)
     except (ValueError, base64.binascii.Error):
         return False
-    text = decoded.decode("ascii", errors="replace")
-    return placeholder(text) or (len(decoded) >= 16 and len(set(decoded)) == 1)
+    if len(decoded) >= 16 and len(set(decoded)) == 1:
+        return True
+    try:
+        text = decoded.decode("ascii")
+    except UnicodeDecodeError:
+        return False
+    return text.isprintable() and (text.lower() in PLACEHOLDERS or bool(FIXTURE_MARKER.search(text)))
 
 
 def secret_matches(text):
