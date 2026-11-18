@@ -72,7 +72,7 @@ def migrate(root, source):
                     raise ValueError("destination_already_has_state")
                 installed.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         with tempfile.TemporaryDirectory(dir=root) as tmp:
-            stage = private_directory(Path(tmp))
+            stage = private_directory(Path(tmp) / "private")
             staged = stage / "bridge.sqlite3"
             os.close(safe_open(staged, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600))
             with closing(sqlite3.connect(staged)) as snapshot:

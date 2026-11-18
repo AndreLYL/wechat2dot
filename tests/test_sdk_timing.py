@@ -92,14 +92,29 @@ class SDKReadTimingTests(unittest.TestCase):
                 release.set()
                 limiter.total_tokens = previous_tokens
 
-        anyio.run(verify)
+        # Bound the reported execution time against the actual worker, independently of
+        # how slow SQLite is on a loaded CI host. Queue time precedes this interval.
+        worker_times = []
+        actual_call = self.adapter.bridge._call
+
+        def measured_call(*args, **kwargs):
+            start = time.perf_counter()
+            try:
+                return actual_call(*args, **kwargs)
+            finally:
+                worker_times.append((time.perf_counter() - start) * 1000)
+
+        with patch.object(self.adapter.bridge, '_call', side_effect=measured_call):
+            anyio.run(verify)
         value = report(self.store)['messages'][0]
         phase = value['phase_ms']
         self.assertEqual(phase['callback_to_dispatch'], 2000)
         self.assertGreaterEqual(phase['dispatch_to_read_thread'], 50)
         self.assertLess(phase['dispatch_to_read_thread'], 2000)
         self.assertEqual(value['timestamps_unix']['read_thread_started'], self.now)
-        self.assertLess(phase['read_server'], phase['dispatch_to_read_thread'])
+        self.assertEqual(len(worker_times), 1)
+        self.assertGreaterEqual(phase['read_server'], 0)
+        self.assertLessEqual(phase['read_server'], worker_times[0] + .001)
         self.assertNotIn('fixture-private', json.dumps(value))
 
     def test_invalid_arguments_and_failed_diagnostics_preserve_tool_contract(self):

@@ -68,7 +68,7 @@ def renew_weixin(store, cfg, no_browser=False):
 
     old = store._binding()
     with tempfile.TemporaryDirectory(dir=store.directory.parent) as tmp:
-        stage = private_directory(Path(tmp))
+        stage = private_directory(Path(tmp) / "private")
         bind_weixin(stage, no_browser)
         with closing(NativeStore(stage)) as fresh:
             new = fresh.get_binding()
