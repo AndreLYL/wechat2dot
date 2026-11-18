@@ -51,7 +51,7 @@ class TokenFileTest(unittest.TestCase):
 
 class AuthTest(unittest.IsolatedAsyncioTestCase):
     def store(self, root, **tokens):
-        file = TokenFile(Path(root) / "login.json")
+        file = TokenFile(Path(root) / "private" / "login.json")
         file.save({"access_token": token(), "refresh_token": "r1", "account_id": "acct-1", **tokens})
         return file
 
