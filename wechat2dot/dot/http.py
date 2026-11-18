@@ -15,6 +15,10 @@ class NetworkError(Exception):
     """Nothing reached the server, or the connection broke before a response."""
 
 
+class NotConnected(NetworkError):
+    """DNS, proxy connection, or TLS setup failed before the request could be written."""
+
+
 class FileUnavailable(Exception):
     """The server confirmed that this particular attachment cannot be retrieved."""
 
@@ -115,6 +119,8 @@ class Http:
                 except ValueError:
                     body = None
                 return Response(resp.status, body, dict(resp.headers))
+        except (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError) as exc:
+            raise NotConnected(type(exc).__name__) from None
         except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
             raise NetworkError(type(exc).__name__) from None
 

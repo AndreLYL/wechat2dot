@@ -3,12 +3,18 @@
 import hashlib
 import json
 import time
+import uuid
 
 from wechat_dot_bridge.store import Store
 
 
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def request_id(mid):
+    # Use a stable UUID-sized idempotency token accepted by the live room endpoint.
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "wechat2dot:owner-message:" + mid))
 
 
 def packed(value):
@@ -107,6 +113,14 @@ class NativeStore(Store):
 
     def recover(self):
         with self._transaction():
+            # An already attempted request must keep its original ID for reconciliation.
+            for row in self.db.execute(
+                "SELECT mid FROM native_in WHERE state='queued' AND attempts=0 AND length(request_id)>64"
+            ).fetchall():
+                self.db.execute(
+                    "UPDATE native_in SET request_id=? WHERE mid=?",
+                    (request_id(row[0]), row[0]),
+                )
             for row in self.db.execute(
                 "SELECT id FROM native_out WHERE state='sending'"
             ):
@@ -157,7 +171,7 @@ class NativeStore(Store):
             for row in rows:
                 self.db.execute(
                     "INSERT OR IGNORE INTO native_in VALUES(?,?,'queued',0,0)",
-                    (row["id"], "w2d-" + digest(row["id"])),
+                    (row["id"], request_id(row["id"])),
                 )
                 self.db.execute(
                     "UPDATE message_work SET state='completed' WHERE message_id=?",
@@ -229,6 +243,7 @@ class NativeStore(Store):
                 ],
                 history_24h=self.history(),
                 last_send=self.get("last_send_evidence"),
+                last_dot_post=self.get("last_dot_post"),
                 recent_issues=[
                     dict(
                         at=r["at"],

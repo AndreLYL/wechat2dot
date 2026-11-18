@@ -391,6 +391,50 @@ asyncio.run(Outgoing(s, None, None, client=Interrupted()).tick())
         )
         self.assertEqual(len(self.room.sent), 1)
 
+    async def test_room_request_id_and_unattempted_legacy_upgrade(self):
+        import uuid
+
+        self.inbound("fresh", "new", "c")
+        self.s.accept_incoming()
+        mid, rid = self.s.db.execute(
+            "SELECT mid,request_id FROM native_in WHERE state='queued'"
+        ).fetchone()
+        self.assertEqual(str(uuid.UUID(rid)), rid)
+        self.s.db.execute(
+            "UPDATE native_in SET request_id=? WHERE mid=?", ("w2d-" + "f" * 64, mid)
+        )
+        self.s.recover()
+        self.assertEqual(
+            self.s.db.execute(
+                "SELECT request_id FROM native_in WHERE mid=?", (mid,)
+            ).fetchone()[0],
+            rid,
+        )
+        self.s.db.execute(
+            "UPDATE native_in SET request_id=?,attempts=1,state='verify' WHERE mid=?",
+            ("w2d-" + "f" * 64, mid),
+        )
+        self.s.recover()
+        self.assertEqual(
+            self.s.db.execute(
+                "SELECT request_id FROM native_in WHERE mid=?", (mid,)
+            ).fetchone()[0],
+            "w2d-" + "f" * 64,
+        )
+
+    async def test_confirmed_connection_failure_retries_with_same_request_id(self):
+        from wechat2dot.dot.http import NotConnected
+
+        self.inbound("fresh", "new", "c")
+        self.room.behavior = NotConnected()
+        self.assertFalse(await self.inbox.tick(self.reader.read))
+        self.assertEqual(self.s.status()["inbox"]["queued"], 1)
+        self.room.behavior = None
+        self.now += 3
+        await self.inbox.tick(self.reader.read)
+        self.assertEqual(self.room.sent[0][1], self.room.sent[1][1])
+        self.assertEqual(self.s.status()["inbox"]["accepted"], 1)
+
     async def test_unknown_post_and_commands_are_not_reposted(self):
         self.inbound("question", "input", "c")
         self.room.behavior = NetworkError()

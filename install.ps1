@@ -7,7 +7,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     } finally { Remove-Item -LiteralPath $tempInstaller -ErrorAction SilentlyContinue }
     $env:Path = (Join-Path $env:USERPROFILE '.local\bin') + ';' + $env:Path
 }
-$package = 'wechat2dot==2.0.0a1'
+$package = 'wechat2dot==2.0.0a2'
 if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'wechat2dot/dot'))) { $package = $PSScriptRoot }
 & uv tool install --upgrade $package
 if ($LASTEXITCODE) { exit $LASTEXITCODE }

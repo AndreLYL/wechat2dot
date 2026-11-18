@@ -1,7 +1,7 @@
 services:
   bridge:
     build: .
-    image: ghcr.io/andrelyl/wechat2dot:2.0.0a1
+    image: ghcr.io/andrelyl/wechat2dot:2.0.0a2
     init: true
     user: "10001:10001"
     restart: unless-stopped

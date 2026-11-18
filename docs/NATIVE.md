@@ -41,6 +41,6 @@
 
 ## 分发和真机验收
 
-当前源码候选版为 `2.0.0a1`。从源码可以构建 wheel、源码包及 Docker 镜像。发布工作流使用已存在的对应标签，构建、测试并分别发布至 PyPI、GHCR、GitHub Release 和 Homebrew tap。运行前需配置 PyPI trusted publishing 和 tap 的写入凭据。新安装的发布路径包括 `uv tool install 'wechat2dot==2.0.0a1'`、`pipx install 'wechat2dot==2.0.0a1'` 和 `brew install andrelyl/tap/wechat2dot`，以对应渠道实际出现版本为准。
+当前源码候选版为 `2.0.0a2`。从源码可以构建 wheel、源码包及 Docker 镜像。发布工作流使用已存在的对应标签，构建、测试并分别发布至 PyPI、GHCR、GitHub Release 和 Homebrew tap。PyPI 需要账号配置 trusted publishing 并在仓库变量中开启 `PUBLISH_PYPI=true`。Homebrew 可由发布者将同一份校验过的 formula 推送至 tap，也可配置专用写入凭据。新安装的发布路径包括 `uv tool install 'wechat2dot==2.0.0a2'`、`pipx install 'wechat2dot==2.0.0a2'` 和 `brew install andrelyl/tap/wechat2dot`，以对应渠道实际出现版本为准。
 
 本地证据见[候选版验收记录](NATIVE_VALIDATION.md)。上线验收还需记录两端可见的实际结果，尤其是 30 小时自动保活、关闭保活 26 小时后的补发、进程在发送期间退出、重启登录、10 分钟断网、首次安装计时，以及 7 天连续运行中每条消息的去向。接口受理与手机实际出现分别记录。

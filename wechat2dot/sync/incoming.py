@@ -6,7 +6,12 @@ import mimetypes
 from wechat_dot_bridge.errors import BridgeError
 from wechat2dot.dot.auth import AuthRequired, AuthUnavailable
 from wechat2dot.dot.client import AccountChanged, DotError, DotProtocolError
-from wechat2dot.dot.http import FileTooLarge, FileUnavailable, NetworkError
+from wechat2dot.dot.http import (
+    FileTooLarge,
+    FileUnavailable,
+    NetworkError,
+    NotConnected,
+)
 from .cards import approval_view
 
 
@@ -204,12 +209,23 @@ class Incoming:
             r = await self.client.send(
                 b.room_id, row["text"], row["request_id"], b.account_id, file_ids
             )
-        except (NetworkError, DotProtocolError, AuthUnavailable):
+        except (NotConnected, AuthUnavailable):
+            # The room POST was not written, or no access token was available to issue one.
+            with s._transaction():
+                s.db.execute(
+                    "UPDATE native_in SET state='queued',retry=? WHERE mid=?",
+                    (s.clock() + 2 ** min(7, row["attempts"] + 1), mid),
+                )
+                s.event("dot_connect_retry", mid)
+            return False
+        except (NetworkError, DotProtocolError):
+            s.event("dot_post_result_unknown", mid)
             self.finish(mid, "verify")
             raise
         except (AuthRequired, AccountChanged):
             self.finish(mid, "queued")
             raise
+        s.put("last_dot_post", {"http": r.status, "time": s.clock()})
         if (
             r.status in (200, 201)
             and isinstance(r.body, dict)

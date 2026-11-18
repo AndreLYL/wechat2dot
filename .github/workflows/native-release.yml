@@ -69,6 +69,7 @@ jobs:
           gh release view "$TAG" >/dev/null || gh release create "$TAG" --verify-tag --generate-notes $release_flags
           gh release upload "$TAG" dist/* wechat2dot.rb
   pypi:
+    if: vars.PUBLISH_PYPI == 'true'
     needs: build
     runs-on: ubuntu-latest
     environment: release
@@ -91,7 +92,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          test -n "$GH_TOKEN"
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'Tap maintainer can publish the verified wechat2dot.rb from the release.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           gh auth setup-git
           gh repo clone AndreLYL/homebrew-tap tap
           mkdir -p tap/Formula

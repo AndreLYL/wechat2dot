@@ -8,7 +8,7 @@ docker compose run --rm bridge setup --no-browser
 docker compose up -d
 ```
 
-向导在终端显示微信二维码和设备码登录地址，分别用自己的微信和 ChatGPT 确认。容器以 UID 10001 运行；进程需要出站 HTTPS，无需映射端口，凭据以私有文件保存在卷中。镜像在发布渠道可用后，也可用 `docker run --rm -it -v wechat2dot:/data ghcr.io/andrelyl/wechat2dot:2.0.0a1 setup --no-browser` 完成首次配置。
+向导在终端显示微信二维码和设备码登录地址，分别用自己的微信和 ChatGPT 确认。容器以 UID 10001 运行；进程需要出站 HTTPS，无需映射端口，凭据以私有文件保存在卷中。镜像在发布渠道可用后，也可用 `docker run --rm -it -v wechat2dot:/data ghcr.io/andrelyl/wechat2dot:2.0.0a2 setup --no-browser` 完成首次配置。
 
 在微信发送 `/status`，核对手机收到的回复。查看最近成功拉取、房间读取和待发队列：
 

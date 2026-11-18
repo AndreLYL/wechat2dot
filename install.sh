@@ -8,7 +8,7 @@ if ! command -v uv >/dev/null 2>&1; then
     PATH="$HOME/.local/bin:$PATH"
     export PATH
 fi
-source_package='wechat2dot==2.0.0a1'
+source_package='wechat2dot==2.0.0a2'
 if [ -f "$0" ]; then
     checkout=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
     if [ -f "$checkout/pyproject.toml" ] && [ -d "$checkout/wechat2dot/dot" ]; then
