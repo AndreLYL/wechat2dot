@@ -4,8 +4,16 @@ import hashlib
 import json
 import time
 import uuid
+from dataclasses import dataclass
 
+from wechat_dot_bridge.message_format import (
+    compact_attachment_quote,
+    compact_quote_text,
+    partial_quote,
+    reference_id,
+)
 from wechat_dot_bridge.store import Store
+from wechat2dot.dot.client import DotError, ident
 
 
 def digest(value):
@@ -21,9 +29,31 @@ def packed(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+@dataclass(frozen=True)
+class QuoteContext:
+    target: str | None = None
+    hint: str = ""
+    selected: bool = False
+    refresh: bool = False
+
+
+def own_text(text):
+    # Some existing rows have the legacy expanded quote before the author's text.
+    while text.startswith(("[引用]\n", "[引用缓存]\n")):
+        closing = "\n[/" + text.partition("\n")[0][1:] + "\n"
+        _, separator, remainder = text.partition(closing)
+        if not separator:
+            break
+        text = remainder
+    return text
+
+
 class NativeStore(Store):
     # The native inbox on disk takes ownership; the legacy cap is for outstanding MCP tasks.
     work_queue_limit = None
+    native_messages = True
+    # Prevent older versions from treating a queued quote like a local command.
+    native_quote_prefix = "[微信引用]\n"
 
     def __init__(self, directory, clock=time.time):
         super().__init__(directory, clock)
@@ -40,6 +70,16 @@ class NativeStore(Store):
             CREATE TABLE IF NOT EXISTS native_in(
                 mid TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, state TEXT NOT NULL,
                 attempts INTEGER DEFAULT 0,retry REAL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS native_in_refs(
+                mid TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                dot_mid TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS native_in_quotes(
+                mid TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+                quotes TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS native_sent_refs(
+                account TEXT NOT NULL, peer TEXT NOT NULL, source_id TEXT NOT NULL,
+                dot_mid TEXT NOT NULL, preview TEXT NOT NULL,
+                PRIMARY KEY(account,peer,source_id));
             CREATE TABLE IF NOT EXISTS native_log(
                 at REAL NOT NULL, code TEXT NOT NULL, ref TEXT);
             CREATE INDEX IF NOT EXISTS native_log_time ON native_log(at);
@@ -156,6 +196,162 @@ class NativeStore(Store):
 
     def notice(self, source, text, priority=0):
         self.enqueue(source, 0, self.clock(), "text", text, priority)
+
+    def _record_compact_quotes(self, message_id, quotes):
+        binding = self._binding()
+        references = []
+        for quote in quotes:
+            raw_ids = quote.get("ids", [quote.get("source_id")])
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            ids = list(dict.fromkeys(
+                sid for value in raw_ids[:2] if (sid := reference_id(value))
+            ))
+            preview = compact_quote_text(quote.get("preview"))
+            selected = quote.get("selected") is True and bool(preview)
+            partial = quote.get("partial")
+            if not selected and isinstance(partial, dict):
+                for sid in ids:
+                    cached = self._quoted_inbound(binding["id"], binding["owner"], sid)
+                    if cached and cached["id"] != message_id:
+                        original = own_text(self.incoming_text(cached["id"], cached["text"]))
+                        excerpt = partial_quote(original, partial)
+                        if excerpt != original:
+                            preview, selected = compact_quote_text(excerpt), True
+                            break
+                if not selected and (excerpt := compact_quote_text(partial.get("start"))):
+                    preview, selected = excerpt, True
+            reference = (ids, preview, selected)
+            if reference not in references:
+                references.append(reference)
+        self.db.execute(
+            "INSERT INTO native_in_quotes VALUES(?,?)", (message_id, packed(references))
+        )
+
+    def has_quote(self, mid):
+        return self.db.execute(
+            "SELECT 1 FROM native_in_quotes WHERE mid=?", (mid,)
+        ).fetchone() is not None
+
+    def incoming_text(self, mid, text):
+        return text.removeprefix(self.native_quote_prefix) if self.has_quote(mid) else text
+
+    def remember_incoming_reference(self, request, dot_mid):
+        try:
+            ident(dot_mid)
+        except DotError:
+            return
+        self.db.execute(
+            """INSERT OR IGNORE INTO native_in_refs(mid,dot_mid)
+               SELECT i.mid,? FROM native_in i JOIN messages m ON m.id=i.mid
+               JOIN binding b ON b.id=m.account AND b.owner=m.peer
+               WHERE i.request_id=? AND i.state IN ('accepted','sending','verify','uncertain')""",
+            (dot_mid, request),
+        )
+
+    def remember_sent_reference(self, binding, source, response, reply):
+        sid = reference_id(response.get("message_id"))
+        if not sid:
+            return
+        try:
+            ident(source)
+        except DotError:
+            return
+        attachment = reply.get("attachment")
+        preview = (
+            compact_attachment_quote(attachment["kind"], attachment["name"])
+            if attachment
+            else compact_quote_text(reply.get("text"))
+        )
+        self.db.execute(
+            """INSERT OR IGNORE INTO native_sent_refs
+               SELECT ?,?,?,id,? FROM native_seen WHERE id=?""",
+            (binding["id"], binding["owner"], sid, preview, source),
+        )
+
+    def prune_sent_references(self, retention):
+        self.db.execute(
+            """DELETE FROM native_sent_refs WHERE NOT EXISTS (
+               SELECT 1 FROM native_seen WHERE id=native_sent_refs.dot_mid AND stamp>=?)""",
+            (self.clock() - retention,),
+        )
+
+    def _incoming_quote_preview(self, account, peer, message):
+        text = own_text(self.incoming_text(message["id"], message["text"]))
+        if text and text != "[微信附件]":
+            return compact_quote_text(text)
+        file = self.db.execute(
+            """SELECT kind,name FROM attachments WHERE account=? AND peer=?
+               AND message_id=? ORDER BY rowid LIMIT 1""",
+            (account, peer, message["id"]),
+        ).fetchone()
+        if file:
+            return compact_attachment_quote(*file)
+        return "附件" if text else ""
+
+    def _quote_target(self, mid, account, peer, ids, preview):
+        cached_fallback = None
+        for sid in ids:
+            cached = self._quoted_inbound(account, peer, sid)
+            if cached and cached["id"] != mid:
+                target = self.db.execute(
+                    """SELECT i.state,r.dot_mid FROM native_in i
+                       LEFT JOIN native_in_refs r ON r.mid=i.mid WHERE i.mid=?""",
+                    (cached["id"],),
+                ).fetchone()
+                if target and target["dot_mid"]:
+                    description = preview or self._incoming_quote_preview(account, peer, cached)
+                    return target["dot_mid"], "用户原消息", description, False
+                if cached_fallback is None or (target and target["state"] == "accepted"):
+                    cached_fallback = cached, bool(target and target["state"] == "accepted")
+            sent = self.db.execute(
+                """SELECT dot_mid,preview FROM native_sent_refs
+                   WHERE account=? AND peer=? AND source_id=?""",
+                (account, peer, sid),
+            ).fetchone()
+            if sent:
+                return sent["dot_mid"], "DOT 原回复", preview or sent["preview"], False
+        if cached_fallback:
+            cached, refresh = cached_fallback
+            description = preview or self._incoming_quote_preview(account, peer, cached)
+            return None, "用户原消息", description, refresh
+        for sid in ids:
+            sent = self.db.execute(
+                """SELECT q.text,a.kind,a.name FROM sent_quote_cache q
+                   LEFT JOIN attachments a ON a.id=q.attachment_id
+                      AND a.account=q.account AND a.peer=q.peer
+                   WHERE q.account=? AND q.peer=? AND q.source_id=?""",
+                (account, peer, sid),
+            ).fetchone()
+            if sent:
+                description = (
+                    compact_attachment_quote(sent["kind"], sent["name"])
+                    if sent["kind"] else compact_quote_text(sent["text"])
+                )
+                return None, "此前回复", preview or description, False
+        return None, "", preview, False
+
+    def quote_context(self, mid):
+        row = self.db.execute(
+            "SELECT quotes FROM native_in_quotes WHERE mid=?", (mid,)
+        ).fetchone()
+        if not row:
+            return QuoteContext()
+        binding = self._binding()
+        references = json.loads(row["quotes"])
+        hints = []
+        for ids, preview, *selected_flags in references[:3]:
+            target, author, preview, refresh = self._quote_target(
+                mid, binding["id"], binding["owner"], ids, preview
+            )
+            label = f"[微信引用 · {author}]" if author else "[微信引用]"
+            hint = preview or ("原消息摘录不可用" if target else "原消息未能定位")
+            hints.append(f"{label} {hint}")
+        if len(references) > 3:
+            hints.append(f"[另有 {len(references) - 3} 条微信引用]")
+        if len(references) == 1:
+            return QuoteContext(target, hints[0], bool(selected_flags and selected_flags[0]), refresh)
+        return QuoteContext(hint="\n".join(hints))
 
     def accept_incoming(self):
         with self._transaction():

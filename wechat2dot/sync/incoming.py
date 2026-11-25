@@ -4,6 +4,7 @@ import json
 import mimetypes
 
 from wechat_dot_bridge.errors import BridgeError
+from wechat_dot_bridge.store import MAX_INBOUND_BYTES
 from wechat2dot.dot.auth import AuthRequired, AuthUnavailable
 from wechat2dot.dot.client import AccountChanged, DotError, DotProtocolError
 from wechat2dot.dot.http import (
@@ -13,6 +14,16 @@ from wechat2dot.dot.http import (
     NotConnected,
 )
 from .cards import approval_view
+
+
+def with_quote_hint(text, hint):
+    if not text:
+        return hint
+    remaining = MAX_INBOUND_BYTES - len(text.encode("utf-8")) - 2
+    if remaining <= 0 or not hint:
+        return text
+    excerpt = hint.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
+    return text + "\n\n" + excerpt if excerpt else text
 
 
 class Incoming:
@@ -28,6 +39,9 @@ class Incoming:
                 self.s.event("dot_" + state, mid)
 
     async def command(self, mid, text):
+        # Replying to a WeChat message is conversation content, including slash commands.
+        if self.s.has_quote(mid):
+            return False
         pieces = text.strip().split()
         if not pieces:
             return False
@@ -173,13 +187,19 @@ class Incoming:
             return True
         if await self.command(mid, row["text"]):
             return True
+        quote = s.quote_context(mid)
+        if quote.refresh:
+            # The original POST may have been accepted before its message ID was known.
+            await read_room(full=False)
+            quote = s.quote_context(mid)
+        text = s.incoming_text(mid, row["text"])
         file_ids = []
         try:
             attachments = s.attachment_metadata(mid)
             if (
                 attachments
                 and all(a["kind"] == "voice" for a in attachments)
-                and row["text"] == "[微信附件]"
+                and text == "[微信附件]"
             ):
                 self.finish(mid, "failed", "这条语音没有微信转写，请发文字或重新录音。")
                 return True
@@ -200,15 +220,27 @@ class Incoming:
                 mid, "failed", "附件无法读取或超过 20 MiB，请在 ChatGPT 中发送。"
             )
             return True
+        fallback_text = with_quote_hint(text, quote.hint)
         with s._transaction():
             s.db.execute(
                 "UPDATE native_in SET state='sending',attempts=attempts+1 WHERE mid=?",
                 (mid,),
             )
         try:
-            r = await self.client.send(
-                b.room_id, row["text"], row["request_id"], b.account_id, file_ids
-            )
+            request = (row["request_id"], b.account_id, file_ids)
+            if quote.target:
+                referenced_text = fallback_text if quote.selected or not (text or file_ids) else text
+                r = await self.client.send(
+                    b.room_id, referenced_text, *request,
+                    reply_to=quote.target,
+                )
+                # Only a validation rejection with no accepted message ID can be retried.
+                if r.status in (400, 422) and not (
+                    isinstance(r.body, dict) and r.body.get("id")
+                ):
+                    r = await self.client.send(b.room_id, fallback_text, *request)
+            else:
+                r = await self.client.send(b.room_id, fallback_text, *request)
         except (NotConnected, AuthUnavailable):
             # The room POST was not written, or no access token was available to issue one.
             with s._transaction():
@@ -231,7 +263,9 @@ class Incoming:
             and isinstance(r.body, dict)
             and r.body.get("request_id") == row["request_id"]
         ):
-            self.finish(mid, "accepted")
+            with s._transaction():
+                s.db.execute("UPDATE native_in SET state='accepted' WHERE mid=?", (mid,))
+                s.remember_incoming_reference(row["request_id"], r.body.get("id"))
         elif r.status == 429:
             from wechat_dot_bridge.send_recovery import retry_delay
 
@@ -242,7 +276,9 @@ class Incoming:
                 "UPDATE native_in SET state='queued',retry=? WHERE mid=?",
                 (s.clock() + delay, mid),
             )
-        elif r.status >= 500 or 200 <= r.status < 300:
+        elif r.status >= 500 or 200 <= r.status < 300 or (
+            r.status in (400, 422) and isinstance(r.body, dict) and r.body.get("id")
+        ):
             self.finish(mid, "verify")
         else:
             self.finish(mid, "failed", "DOT 未接受这条微信来信，请检查状态。")

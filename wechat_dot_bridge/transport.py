@@ -345,7 +345,49 @@ def _numeric_identifier(value) -> str | None:
     return None
 
 
-def _normalize_message(message: dict, binding: dict, now: float) -> dict | None:
+def _compact_reference(ref):
+    from .media import KINDS, safe_name
+    from .message_format import (
+        compact_attachment_quote,
+        compact_quote_text,
+        partial_quote,
+        reference_id,
+    )
+
+    item = ref.get("message_item")
+    item = item if isinstance(item, dict) else {}
+    item_type = item.get("type")
+    kind = KINDS.get(item_type) if type(item_type) is int else None
+    ids = list(dict.fromkeys(filter(None, (
+        reference_id(ref.get("svr_id")), reference_id(item.get("msg_id"))
+    ))))
+    partial = ref.get("partial_text")
+    selected = False
+    if kind:
+        body = item.get(kind + "_item")
+        filename = body.get("file_name") if isinstance(body, dict) else None
+        preview = compact_attachment_quote(
+            kind, safe_name(filename) if isinstance(filename, str) and filename else None
+        )
+        partial = None
+    else:
+        body = item.get("text_item")
+        original = body.get("text") if isinstance(body, dict) else None
+        if isinstance(original, str):
+            original = original.encode("utf-8", errors="replace").decode("utf-8")
+            excerpt = partial_quote(original, partial)
+            selected = excerpt != original
+            preview = compact_quote_text(excerpt)
+        else:
+            preview = ""
+        if not preview:
+            preview = compact_quote_text(ref.get("title"))
+    return {"ids": ids, "preview": preview, "partial": partial, "selected": selected}
+
+
+def _normalize_message(
+    message: dict, binding: dict, now: float, *, native_messages=False
+) -> dict | None:
     if not isinstance(message, dict):
         return None
     if (message.get("from_user_id") != binding["owner"] or message.get("group_id")
@@ -370,9 +412,11 @@ def _normalize_message(message: dict, binding: dict, now: float) -> dict | None:
     for item in items:
         if not isinstance(item, dict) or type(item.get("type")) is not int:
             return None
-        if item.get("ref_msg"):
+        ref = item.get("ref_msg")
+        if native_messages and isinstance(ref, dict) and ref:
+            quotes.append(_compact_reference(ref))
+        if ref and not native_messages:
             from .message_format import quote_content
-            ref = item["ref_msg"]
             quoted, quoted_media = quote_content(ref)
             if quoted_media:
                 quoted_body=quoted_media.get(KINDS[quoted_media["type"]]+"_item")
@@ -434,10 +478,15 @@ def _normalize_message(message: dict, binding: dict, now: float) -> dict | None:
     if len(attachments) > 8:
         attachments = [{"kind": "file", "name": "attachments", "error": "media_too_large"}]
     text = "\n".join(parts)
-    if not text.strip() and attachments:
-        text = "[微信附件]"
+    if not text.strip():
+        if attachments:
+            text = "[微信附件]"
+        elif native_messages and quotes:
+            text = ""
+        else:
+            return None
     try:
-        if not text.strip() or len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
             return None
     except UnicodeError:
         return None
@@ -523,7 +572,12 @@ class WeixinWorker:
             if not isinstance(cursor, str) or len(cursor.encode("utf-8")) > MAX_CURSOR_BYTES:
                 raise BridgeError("response_invalid")
             clock = getattr(self.client, "clock", time.time)
-            normalized = [item for message in messages if (item := _normalize_message(message, binding, clock())) is not None]
+            native = getattr(self.store, "native_messages", False) is True
+            normalized = [
+                item
+                for message in messages
+                if (item := _normalize_message(message, binding, clock(), native_messages=native)) is not None
+            ]
             for item in normalized:
                 item["received_at"]=received_at
             # Store commits messages, owner context and cursor as one transaction.

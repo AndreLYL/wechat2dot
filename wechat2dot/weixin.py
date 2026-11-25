@@ -258,6 +258,8 @@ class Outgoing:
                 )
             if error:
                 s.event(error, row["id"])
+            if state == "accepted" and row["priority"] == 1:
+                s.remember_sent_reference(binding, row["source"], response, reply)
         return True
 
 

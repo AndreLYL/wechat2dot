@@ -144,6 +144,7 @@ async def service_loop(root, config, s, stack):
                 if s.get("head") != previous_head:
                     last_active = time.monotonic()
                 if sweep:
+                    s.prune_sent_references(config.retention)
                     last_sweep = time.monotonic()
                 if s.get("dot_error") != "dot_protocol_changed" or not s.get(
                     "protocol_stop"

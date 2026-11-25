@@ -159,6 +159,8 @@ class RoomReader:
                                      AND state IN ('sending','verify','uncertain')""",
                             (item["request_id"],),
                         )
+                        if not item.get("deleted_at"):
+                            s.remember_incoming_reference(item["request_id"], item["id"])
                     if sender_of(item) in b.dot_members and not item.get("deleted_at"):
                         self.observe(item, stamp, now)
             if full and baseline is not None:
