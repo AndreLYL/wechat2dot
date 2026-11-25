@@ -196,29 +196,33 @@ class Incoming:
         file_ids = []
         try:
             attachments = s.attachment_metadata(mid)
-            if (
-                attachments
-                and all(a["kind"] == "voice" for a in attachments)
-                and text == "[微信附件]"
-            ):
+            files = [item for item in attachments if item["kind"] != "voice"]
+            if attachments and not files and text in ("", "[微信附件]"):
                 self.finish(mid, "failed", "这条语音没有微信转写，请发文字或重新录音。")
                 return True
-            for a in attachments:
-                if a["kind"] == "voice":
-                    continue
-                if a["status"] in ("pending", "downloading"):
-                    return False
-                attachment = s.read_attachment(a["attachment_id"])
-                mime = mimetypes.guess_type(a["name"])[0] or "application/octet-stream"
+            if any(item["status"] in ("pending", "downloading") for item in files):
+                return False
+            for item in files:
+                if item["status"] != "ready":
+                    raise BridgeError(item["error"] or "attachment_unavailable")
+            for item in files:
+                attachment = s.read_attachment(item["attachment_id"])
+                mime = mimetypes.guess_type(item["name"])[0] or "application/octet-stream"
                 file_ids.append(
                     await self.client.upload_file(
-                        b.room_id, a["name"], mime, attachment["data"], b.account_id
+                        b.room_id, item["name"], mime, attachment["data"], b.account_id
                     )
                 )
-        except (FileTooLarge, FileUnavailable, BridgeError):
-            self.finish(
-                mid, "failed", "附件无法读取或超过 20 MiB，请在 ChatGPT 中发送。"
+        except (FileTooLarge, FileUnavailable, BridgeError) as error:
+            too_large = isinstance(error, FileTooLarge) or (
+                isinstance(error, BridgeError) and error.code == "media_too_large"
             )
+            notice = (
+                "附件超过传输大小上限，请在 ChatGPT 主对话中上传。"
+                if too_large
+                else "附件无法读取或上传，请在 ChatGPT 主对话中上传。"
+            )
+            self.finish(mid, "failed", notice)
             return True
         fallback_text = with_quote_hint(text, quote.hint)
         with s._transaction():
@@ -234,13 +238,17 @@ class Incoming:
                     b.room_id, referenced_text, *request,
                     reply_to=quote.target,
                 )
-                # Only a validation rejection with no accepted message ID can be retried.
-                if r.status in (400, 422) and not (
-                    isinstance(r.body, dict) and r.body.get("id")
-                ):
-                    r = await self.client.send(b.room_id, fallback_text, *request)
             else:
                 r = await self.client.send(b.room_id, fallback_text, *request)
+            # Retry only a rejected reference or empty caption, using the same file and request IDs.
+            if (
+                r.status in (400, 422)
+                and not (isinstance(r.body, dict) and r.body.get("id"))
+                and (quote.target or (not fallback_text and file_ids))
+            ):
+                r = await self.client.send(
+                    b.room_id, fallback_text or "[微信附件]", *request
+                )
         except (NotConnected, AuthUnavailable):
             # The room POST was not written, or no access token was available to issue one.
             with s._transaction():

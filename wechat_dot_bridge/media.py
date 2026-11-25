@@ -91,17 +91,18 @@ def cdn_parts(url):
         raise BridgeError("media_endpoint_rejected") from None
 
 
-def cdn_request(url, data=None):
+def cdn_request(url, data=None, *, max_download=MAX_MEDIA + 16):
     # Caller authorizes the exact CDN before shared DNS or connection I/O.
     p = cdn_parts(url)
     if data is not None and len(data) > MAX_MEDIA + 16:
         raise BridgeError("media_too_large")
     try:
         addresses = resolve_addresses(CDN_HOST, dns=NETWORK_DNS, proxy=NETWORK_PROXY)
-        limit = MAX_MEDIA + 16 if data is None else 65536
+        limit = max_download if data is None else 65536
+        timeout = 120 if data is None and limit > MAX_MEDIA + 16 else 30
         response = request(CDN_HOST, addresses, "POST" if data is not None else "GET",
                            p.path + ("?" + p.query if p.query else ""), data,
-                           {"Content-Type": "application/octet-stream"}, timeout=30,
+                           {"Content-Type": "application/octet-stream"}, timeout=timeout,
                            max_response=limit, proxy=NETWORK_PROXY, body_statuses={200})
         if response.status != 200:
             raise BridgeError("media_http_rejected" if 400 <= response.status < 500 else "media_http_error")
@@ -158,10 +159,17 @@ def image_preview(data):
         raise BridgeError("media_image_invalid") from None
 
 
-def fetch(ref):
-    raw, _ = cdn_request(ref["url"])
-    data = crypt(raw, bytes.fromhex(ref["key"]), True) if ref.get("key") else raw
-    if not data or len(data) > MAX_MEDIA:
+def fetch(ref, *, max_bytes=MAX_MEDIA):
+    key = ref.get("key")
+    # AES adds PKCS7 padding, including a full block for aligned content.
+    max_download = (max_bytes // 16 + 1) * 16 if key else max_bytes
+    raw, _ = cdn_request(ref["url"], max_download=max_download)
+    if not raw:
+        raise BridgeError("media_invalid")
+    data = crypt(raw, bytes.fromhex(key), True) if key else raw
+    if not data:
+        raise BridgeError("media_invalid")
+    if len(data) > max_bytes:
         raise BridgeError("media_too_large")
     if ref["kind"] == "image":
         image_preview(data)  # Reject corrupt images and decompression bombs.
@@ -230,8 +238,9 @@ def upload_item(client, binding, attachment):
 
 
 class MediaWorker:
-    def __init__(self, store):
+    def __init__(self, store, *, max_file_bytes=MAX_MEDIA):
         self.store = store
+        self.max_file_bytes = max_file_bytes
         with store.lock:
             store.db.execute("""UPDATE attachments SET status='pending',
                 attempts=MAX(0,attempts-1),error='media_interrupted',next_attempt=?
@@ -242,7 +251,12 @@ class MediaWorker:
         if row is None:
             return False
         try:
-            self.store.finish_attachment(row["id"], fetch(json.loads(row["descriptor"])))
+            ref = json.loads(row["descriptor"])
+            limit = self.max_file_bytes
+            if ref["kind"] != "file":
+                limit = min(limit, MAX_MEDIA)
+            data = fetch(ref) if limit == MAX_MEDIA else fetch(ref, max_bytes=limit)
+            self.store.finish_attachment(row["id"], data, max_size=limit)
         except BridgeError as error:
             self.store.fail_attachment(row["id"], error.code)
         except Exception:

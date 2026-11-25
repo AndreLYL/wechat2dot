@@ -479,10 +479,10 @@ def _normalize_message(
         attachments = [{"kind": "file", "name": "attachments", "error": "media_too_large"}]
     text = "\n".join(parts)
     if not text.strip():
-        if attachments:
-            text = "[微信附件]"
-        elif native_messages and quotes:
+        if native_messages and (quotes or any(ref["kind"] != "voice" for ref in attachments)):
             text = ""
+        elif attachments:
+            text = "[微信附件]"
         else:
             return None
     try:

@@ -8,6 +8,12 @@
 
 向导的 `--no-service` 适用于前台试运行，随后执行 `wechat2dot run`，另开终端看 `wechat2dot status`。后台安装使用 launchd、systemd 用户服务或 Windows 登录计划任务。原生进程读取同一份 `config.toml`，状态保存在 `state/bridge.sqlite3`，运行期间每隔几秒更新 `status.json`。Mac 默认数据目录是 `~/Library/Application Support/wechat2dot`。可通过 `wechat2dot --home "/私有目录" setup` 指定另一位置；之后每条管理命令也要指定该位置。备份整个目录时使用私有存储，系统钥匙串内的凭据需另外保留或重新登录。
 
+DOT 实时连接在线时，漏掉房间事件会在下一轮房间补查发现，空闲补查间隔为 15 秒。回复还要经过正文稳定性确认和微信发送，可在手机上核对实际收件时间。
+
+微信引用能匹配到同一绑定会话的原消息时，会同步为 DOT 原生引用。选中的摘录会随回复一起发送。找不到原消息时，桥接会尽量附上短摘录或附件名。
+
+微信传往 DOT 的附件默认最多 20 MiB。可在 `config.toml` 将 `inbound_file_mib` 设置为 1 至 64。普通文件可用更高上限，图片、视频和语音仍受 20 MiB 或更低配置值限制。微信和 DOT 服务也可能有自己的上限。回滚到不支持此选项的版本前，先从 `config.toml` 去掉显式设置的 `inbound_file_mib`。
+
 ## 排错
 
 | 现象 | 怎么确认或恢复 |

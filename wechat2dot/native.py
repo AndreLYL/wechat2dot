@@ -11,6 +11,7 @@ import time
 
 from wechat_dot_bridge.cli import acquire_lock
 from wechat_dot_bridge.media import MediaWorker, configure_network as media_network
+from wechat_dot_bridge.net_transport import cancel_all, reset_cancellation
 from wechat_dot_bridge.transport import WeixinWorker, configure_network
 from .config import Config, atomic_file
 from .dot.auth import Auth, AuthRequired, AuthUnavailable
@@ -58,13 +59,14 @@ async def service_loop(root, config, s, stack):
     media_network(None, config.dns)
     http = Http(dns=config.dns)
     auth = Auth(token_store(config), http)
-    dot = DotClient(http, auth)
+    dot = DotClient(http, auth, max_upload_bytes=config.inbound_file_bytes)
     if not (
         config.account_id and config.dot_id and config.room_id and s.get("members")
     ):
         raise ValueError("setup_required")
     from .dot.client import Binding
 
+    reset_cancellation()
     members = s.get("members")
     b = Binding(
         config.account_id,
@@ -95,7 +97,7 @@ async def service_loop(root, config, s, stack):
         return stack.enter_context(closing(NativeStore(state)))
 
     poller = WeixinWorker(connection())
-    media = MediaWorker(connection())
+    media = MediaWorker(connection(), max_file_bytes=config.inbound_file_bytes)
     direct = NotificationDispatch(connection(), out.client)
 
     def resync():
@@ -226,38 +228,52 @@ async def service_loop(root, config, s, stack):
                 event(b.room_id, "inbound")
             await asyncio.sleep(0.2 if success else 5)
 
-    async def shipping():
+    async def download_media():
+        while not stop.is_set():
+            download = asyncio.create_task(asyncio.to_thread(media.tick))
+            try:
+                await asyncio.shield(download)
+            except asyncio.CancelledError:
+                # Shutdown cancels network I/O before waiting for SQLite state to settle.
+                await download
+                raise
+            await asyncio.sleep(0.4)
+
+    async def receive():
+        if (
+            checked_room
+            and retry_until <= time.monotonic()
+            and not s.get("protocol_stop")
+        ):
+            await inbox.tick(reader.read)
+        else:
+            s.accept_incoming()
+            await local_commands()
+
+    next_card = 0
+
+    async def ship():
+        nonlocal next_card
+        if not s.get("protocol_stop") or s.db.execute(
+            "SELECT 1 FROM native_out WHERE priority<1 AND state='queued'"
+        ).fetchone():
+            await out.tick()
+        if not s.get("paused") and not s.get("closed_context"):
+            await asyncio.to_thread(direct.tick)
+        if (
+            time.monotonic() >= next_card
+            and checked_room
+            and not s.get("dot_error")
+            and not s.get("protocol_stop")
+        ):
+            next_card = time.monotonic() + 30
+            await update_cards(s, dot, reader.b)
+
+    async def transfer(step):
         nonlocal checked_room
-        next_card = 0
         while not stop.is_set():
             try:
-                await asyncio.to_thread(media.tick)
-                if (
-                    checked_room
-                    and retry_until <= time.monotonic()
-                    and not s.get("protocol_stop")
-                ):
-                    await inbox.tick(reader.read)
-                else:
-                    s.accept_incoming()
-                    await local_commands()
-                if (
-                    not s.get("protocol_stop")
-                    or s.db.execute(
-                        "SELECT 1 FROM native_out WHERE priority<1 AND state='queued'"
-                    ).fetchone()
-                ):
-                    await out.tick()
-                if not s.get("paused") and not s.get("closed_context"):
-                    await asyncio.to_thread(direct.tick)
-                if (
-                    time.monotonic() >= next_card
-                    and checked_room
-                    and not s.get("dot_error")
-                    and not s.get("protocol_stop")
-                ):
-                    next_card = time.monotonic() + 30
-                    await update_cards(s, dot, reader.b)
+                await step()
             except DotProtocolError:
                 fault("dot_protocol_changed")
                 s.put("protocol_stop", True)
@@ -314,8 +330,13 @@ async def service_loop(root, config, s, stack):
             pass
     s.put("protocol_stop", False)
     jobs = [
-        asyncio.create_task(f())
-        for f in (room_loop, wx_loop, shipping, housekeeping, live.run)
+        asyncio.create_task(room_loop()),
+        asyncio.create_task(wx_loop()),
+        asyncio.create_task(download_media()),
+        asyncio.create_task(transfer(receive)),
+        asyncio.create_task(transfer(ship)),
+        asyncio.create_task(housekeeping()),
+        asyncio.create_task(live.run()),
     ]
     waiter = asyncio.create_task(stop.wait())
     try:
@@ -330,6 +351,7 @@ async def service_loop(root, config, s, stack):
     finally:
         poller.client.cancel()
         out.client.cancel()
+        cancel_all()
         for task in [waiter, *jobs]:
             task.cancel()
         await asyncio.gather(waiter, *jobs, return_exceptions=True)

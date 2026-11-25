@@ -310,14 +310,21 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
     async def test_connected_room_rechecks_and_forwards_when_push_event_is_missing(self):
         await self._round_trip(push_event=False)
 
-    async def _round_trip(self, *, push_event):
+    async def test_outbound_delivery_continues_during_slow_inbound_work(self):
+        for stage in ("download", "upload"):
+            with self.subTest(stage=stage):
+                await self._round_trip(push_event=True, blocked_stage=stage)
+
+    async def _round_trip(self, *, push_event, blocked_stage=None):
         from contextlib import ExitStack
+        from threading import Event
         import time
         from types import SimpleNamespace
         from unittest.mock import AsyncMock
         from wechat2dot.native import service_loop
         from wechat2dot.dot.client import Binding
         from wechat2dot.dot.http import Response
+        from wechat2dot.sync.incoming import Incoming
         from wechat2dot.sync.room import RoomReader
 
         binding = Binding("account", "dot", "room", ("agent",), ("owner",), "DOT")
@@ -327,6 +334,19 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
         read_after_delivery = asyncio.Event()
         recheck_delays = []
         received = []
+        slow_started = Event()
+        release_download = Event()
+        inbox_tick = Incoming.tick
+
+        def slow_download():
+            slow_started.set()
+            release_download.wait()
+
+        async def slow_receive(inbox, read_room):
+            if reply_added.is_set():
+                slow_started.set()
+                await asyncio.Event().wait()
+            return await inbox_tick(inbox, read_room)
 
         class Room:
             def __init__(self):
@@ -436,6 +456,12 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             )
             stack.enter_context(patch("wechat2dot.native.DotClient", return_value=room))
             stack.enter_context(patch("wechat2dot.native.DotLive", Socket))
+            if blocked_stage == "download":
+                stack.enter_context(
+                    patch("wechat2dot.native.MediaWorker.tick", side_effect=slow_download)
+                )
+            elif blocked_stage == "upload":
+                stack.enter_context(patch.object(Incoming, "tick", slow_receive))
             if not push_event:
                 native_asyncio = SimpleNamespace(**dict(vars(asyncio), wait_for=room_wait_for))
                 stack.enter_context(patch("wechat2dot.native.asyncio", native_asyncio))
@@ -456,6 +482,8 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.1)
                 self.assertEqual(room.posts, ["inbound fixture"])
                 self.assertEqual(received, ["outbound fixture"])
+                if blocked_stage:
+                    self.assertTrue(slow_started.is_set())
                 if not push_event:
                     self.assertEqual(recheck_delays, [15])
                 self.assertEqual(s.status()["outbox"], {"accepted": 1})
@@ -465,5 +493,6 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
                     f"daemon did not complete round trip: {s.status()}, room posts {room.posts!r}, seen {list(map(tuple, s.db.execute('select id,state from native_seen')))}"
                 )
             finally:
+                release_download.set()
                 worker.cancel()
                 await asyncio.gather(worker, return_exceptions=True)
