@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,7 @@ from wechat2dot.notification_mcp import Notifications
 from wechat2dot.service import definition
 from wechat2dot.sync.store import NativeStore
 from wechat2dot.platform import private_directory
+from wechat_dot_bridge import migrations
 from wechat_dot_bridge.cli import acquire_lock
 from wechat_dot_bridge.mcp import MCPServer
 from wechat_dot_bridge.store import Store
@@ -110,6 +112,59 @@ class Operators(unittest.TestCase):
             old.ingest("wx", [], "later-cursor")
         with self.assertRaisesRegex(ValueError, "destination_already_has_state"):
             migrate(self.root, source)
+
+    def test_offline_migration_accepts_legacy_state_without_notification_tables(self):
+        source = private_directory(self.base / "old")
+        state = private_directory(source / "state")
+        locks = private_directory(source / "locks")
+        atomic_file(
+            source / "bridge.json",
+            json.dumps({"state_dir": str(state), "lock_dir": str(locks)}),
+        )
+        database = state / "bridge.sqlite3"
+        atomic_file(database, "")
+        # v0.2.0-alpha.2 shipped schema 8, before notifications were added.
+        with (
+            closing(sqlite3.connect(database, isolation_level=None)) as db,
+            patch.object(migrations, "MIGRATIONS", migrations.MIGRATIONS[:8]),
+            patch.object(migrations, "SCHEMA_VERSION", 8),
+        ):
+            migrations.migrate(db)
+            db.execute(
+                "INSERT INTO binding(id,owner,token,base_url,cursor) VALUES(?,?,?,?,?)",
+                ("wx", "me", "fixture", "https://ilinkai.weixin.qq.com", "old-cursor"),
+            )
+            db.execute(
+                "INSERT INTO messages(id,account,peer,source_id,text,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                ("old-message", "wx", "me", "before", "old", 100),
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT name FROM sqlite_master WHERE name IN "
+                    "('notifications','notification_policy')"
+                ).fetchall(),
+                [],
+            )
+        original = database.read_bytes()
+
+        self.assertTrue(migrate(self.root, source)["source_preserved"])
+        self.assertTrue(migrate(self.root, source)["reused"])
+        self.assertEqual(database.read_bytes(), original)
+        with closing(NativeStore(self.root / "state")) as current:
+            self.assertEqual(current.get_binding()["cursor"], "old-cursor")
+            self.assertEqual(
+                current.db.execute("SELECT id FROM messages").fetchone()[0],
+                "old-message",
+            )
+            self.assertEqual(current.accept_incoming(), 0)
+
+        with closing(sqlite3.connect(database, isolation_level=None)) as db:
+            db.execute("UPDATE binding SET cursor=?", ("new-cursor",))
+        self.assertTrue(migrate(self.root, source)["source_preserved"])
+        with closing(NativeStore(self.root / "state")) as current:
+            self.assertEqual(current.get_binding()["cursor"], "new-cursor")
+            self.assertEqual(current.accept_incoming(), 0)
 
     def test_renew_weixin_preserves_owner_cursor_and_queue(self):
         from wechat2dot.setup_native import renew_weixin

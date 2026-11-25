@@ -18,14 +18,21 @@ def source_fingerprint(directory):
     file = check_private_path(directory / "bridge.sqlite3")
     with closing(sqlite3.connect(file.as_uri() + "?mode=ro", uri=True)) as db:
         h = hashlib.sha256()
-        for q in (
-            "SELECT id,owner,token,cursor FROM binding ORDER BY id",
-            "SELECT client_id,status,attempts FROM replies ORDER BY client_id",
-            "SELECT id,status,attempts FROM notifications ORDER BY id",
-            "SELECT id FROM messages ORDER BY id",
-            "SELECT * FROM notification_policy ORDER BY account,peer",
+        # The first 0.2 release predates the optional notification tables.
+        optional = {"notifications", "notification_policy"}
+        tables = {
+            name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        for table, query in (
+            ("binding", "SELECT id,owner,token,cursor FROM binding ORDER BY id"),
+            ("replies", "SELECT client_id,status,attempts FROM replies ORDER BY client_id"),
+            ("notifications", "SELECT id,status,attempts FROM notifications ORDER BY id"),
+            ("messages", "SELECT id FROM messages ORDER BY id"),
+            ("notification_policy", "SELECT * FROM notification_policy ORDER BY account,peer"),
         ):
-            for row in db.execute(q):
+            if table in optional and table not in tables:
+                continue
+            for row in db.execute(query):
                 h.update(json.dumps(row).encode())
         return h.hexdigest()
 
