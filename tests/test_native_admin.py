@@ -305,8 +305,15 @@ class Operators(unittest.TestCase):
 
 class NativeDaemon(unittest.IsolatedAsyncioTestCase):
     async def test_owner_poll_to_room_and_back_with_persistent_cursors(self):
+        await self._round_trip(push_event=True)
+
+    async def test_connected_room_rechecks_and_forwards_when_push_event_is_missing(self):
+        await self._round_trip(push_event=False)
+
+    async def _round_trip(self, *, push_event):
         from contextlib import ExitStack
         import time
+        from types import SimpleNamespace
         from unittest.mock import AsyncMock
         from wechat2dot.native import service_loop
         from wechat2dot.dot.client import Binding
@@ -315,47 +322,66 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
 
         binding = Binding("account", "dot", "room", ("agent",), ("owner",), "DOT")
 
+        reply_added = asyncio.Event()
+        read_before_reply = asyncio.Event()
+        read_after_delivery = asyncio.Event()
+        recheck_delays = []
+        received = []
+
         class Room:
-            messages_by_id = []
-            posts = []
+            def __init__(self):
+                self.messages_by_id = []
+                self.posts = []
 
             async def messages(self, *args, **kwargs):
-                return list(self.messages_by_id)
+                page = list(self.messages_by_id)
+                if self.posts and not reply_added.is_set():
+                    read_before_reply.set()
+                if received:
+                    read_after_delivery.set()
+                return page
 
             async def send(self, rid, text, request, account, files):
                 self.posts.append(text)
-                self.messages_by_id.extend(
-                    [
-                        dict(
-                            id="human",
-                            account_user_id="owner",
-                            created_at=time.time(),
-                            content={"text": text},
-                            request_id=request,
-                        ),
-                        dict(
-                            id="answered",
-                            account_user_id="agent",
-                            created_at=time.time(),
-                            content={"text": "outbound fixture"},
-                        ),
-                    ]
+                self.messages_by_id.append(
+                    dict(
+                        id="human",
+                        account_user_id="owner",
+                        created_at=time.time(),
+                        content={"text": text},
+                        request_id=request,
+                    )
                 )
-                pushed.set()
+                if not push_event:
+                    await read_before_reply.wait()
+                self.messages_by_id.append(
+                    dict(
+                        id="answered",
+                        account_user_id="agent",
+                        created_at=time.time(),
+                        content={"text": "outbound fixture"},
+                    )
+                )
+                reply_added.set()
                 return Response(201, {"request_id": request}, {})
 
         class Socket:
-            connected = False
+            connected = True
 
             def __init__(self, dot, event, resync):
                 self.event = event
 
             async def run(self):
-                await pushed.wait()
-                self.event("room", "message")
+                if push_event:
+                    await reply_added.wait()
+                    self.event("room", "message")
                 await asyncio.Event().wait()
 
-        received = []
+        async def room_wait_for(awaitable, timeout):
+            if read_before_reply.is_set() and not reply_added.is_set():
+                recheck_delays.append(timeout)
+            # Speed up idle checks without replacing the scheduled interval being tested.
+            return await asyncio.wait_for(awaitable, 0.05 if timeout >= 15 else timeout)
 
         def poll(binding_row):
             msgs = (
@@ -381,7 +407,6 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             received.append(payload["text"])
             return {"ret": 0}
 
-        pushed = asyncio.Event()
         room = Room()
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
             root = private_directory(Path(tmp).resolve() / "root")
@@ -411,6 +436,9 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             )
             stack.enter_context(patch("wechat2dot.native.DotClient", return_value=room))
             stack.enter_context(patch("wechat2dot.native.DotLive", Socket))
+            if not push_event:
+                native_asyncio = SimpleNamespace(**dict(vars(asyncio), wait_for=room_wait_for))
+                stack.enter_context(patch("wechat2dot.native.asyncio", native_asyncio))
             stack.enter_context(
                 patch("wechat_dot_bridge.transport.IlinkClient.poll", side_effect=poll)
             )
@@ -420,12 +448,16 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             worker = asyncio.create_task(service_loop(root, cfg, s, stack))
             try:
                 async with asyncio.timeout(15):
-                    while not received:
+                    while not received or (
+                        not push_event and not read_after_delivery.is_set()
+                    ):
                         if worker.done():
                             worker.result()
                         await asyncio.sleep(0.1)
                 self.assertEqual(room.posts, ["inbound fixture"])
                 self.assertEqual(received, ["outbound fixture"])
+                if not push_event:
+                    self.assertEqual(recheck_delays, [15])
                 self.assertEqual(s.status()["outbox"], {"accepted": 1})
                 self.assertEqual(s.status()["inbox"], {"accepted": 1})
             except TimeoutError:

@@ -156,11 +156,12 @@ async def service_loop(root, config, s, stack):
                 waiting = s.db.execute(
                     "SELECT 1 FROM native_seen WHERE state IN ('observing','streaming') LIMIT 1"
                 ).fetchone()
+                # Reconcile missed room events even while the socket stays connected.
                 delay = (
                     2
                     if waiting
                     else (
-                        120
+                        15
                         if live.connected
                         else (2 if time.monotonic() - last_active < 900 else 60)
                     )
