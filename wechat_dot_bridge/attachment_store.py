@@ -45,7 +45,8 @@ class AttachmentStore:
     def _cache_room(self, size):
         total = self.db.execute("SELECT COALESCE(SUM(length(data)),0) FROM attachments").fetchone()[0]
         total += self.db.execute("SELECT COALESCE(SUM(length(data)),0) FROM attachment_uploads").fetchone()[0]
-        if size > MAX_MEDIA or total + size > getattr(self,"media_policy",{}).get("cache_mib",MAX_CACHE//1048576)*1048576:
+        cache_mib = getattr(self, "media_policy", {}).get("cache_mib", MAX_CACHE // 1048576)
+        if total + size > cache_mib * 1048576:
             raise BridgeError("media_cache_full")
 
     def _ingest_attachments(self, binding, message_id, refs):
@@ -98,9 +99,13 @@ class AttachmentStore:
             self.db.execute("UPDATE attachments SET attempts=attempts+1,status='downloading' WHERE id=?", (row["id"],))
             return dict(row)
 
-    def finish_attachment(self, attachment_id, data):
+    def finish_attachment(self, attachment_id, data, *, max_size=MAX_MEDIA):
         with self._transaction():
             self._attachment(attachment_id)
+            if not data:
+                raise BridgeError("media_invalid")
+            if len(data) > max_size:
+                raise BridgeError("media_too_large")
             self._cache_room(len(data))
             self.db.execute("UPDATE attachments SET data=?,status='ready',error=NULL WHERE id=?", (data, attachment_id))
 

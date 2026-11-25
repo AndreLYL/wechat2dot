@@ -84,6 +84,8 @@ SAFE_ERRORS = SAFE_ERRORS | MEDIA_ERRORS
 
 class Store(AttachmentStore, WorkStore, NotificationStore):
     work_queue_limit = MAX_PENDING
+    native_messages = False
+    native_quote_prefix = ""
 
     def __init__(self, state_dir, clock=time.time):
         self.directory = _private_directory(state_dir)
@@ -243,6 +245,17 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             self.db.execute("UPDATE binding SET last_error=?,status=? WHERE id=?",
                             (diagnostic, status, binding["id"]))
 
+    def _quoted_inbound(self, account, peer, source_id):
+        return self.db.execute(
+            """SELECT m.id,m.text FROM messages m LEFT JOIN message_aliases a ON a.message_id=m.id
+               WHERE m.account=? AND m.peer=? AND
+               (a.reference_id=? OR m.source_id IN (?,?)) LIMIT 1""",
+            (account, peer, source_id, "message:" + source_id, "message:item:" + source_id),
+        ).fetchone()
+
+    def _record_compact_quotes(self, message_id, quotes):
+        pass
+
     def ingest(self, account_id, messages, cursor, *, after_commit=None):
         if (not isinstance(messages, list) or len(messages) > 1000
                 or not isinstance(cursor, str) or _text_bytes(cursor) is None
@@ -257,7 +270,7 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
             context = message.get("context_token")
             size = _text_bytes(text)
             if (not _identity(source) or not _identity(peer) or size is None
-                    or not 0 < size <= MAX_INBOUND_BYTES or not _timestamp(created_at)
+                    or size > MAX_INBOUND_BYTES or not _timestamp(created_at)
                     or (context is not None and (not isinstance(context, str)
                         or not 0 < len(context) <= 16384))):
                 raise BridgeError("invalid_inbound_message")
@@ -266,6 +279,8 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                 raise BridgeError("invalid_inbound_message")
             quotes = message.get("quotes", [])
             if not isinstance(quotes, list) or len(quotes) > 32 or any(not isinstance(q, dict) for q in quotes):
+                raise BridgeError("invalid_inbound_message")
+            if size == 0 and not (self.native_messages and (refs or quotes)):
                 raise BridgeError("invalid_inbound_message")
             aliases=message.get("aliases",[])
             from .message_format import reference_id
@@ -302,13 +317,13 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                 from .message_format import partial_quote
                 cached_aids, quote_states = [], []
                 from .message_format import reference_id
-                for position,quote in enumerate(quotes):
+                for position,quote in enumerate(() if self.native_messages else quotes):
                     sid=reference_id(quote.get("source_id"))
                     status="inline" if quote.get("inline") else "not_cached" if sid else "reference_not_provided"
                     resolved=None
                     cached=None
                     if sid:
-                        cached=self.db.execute("SELECT m.id,m.text FROM messages m LEFT JOIN message_aliases a ON a.message_id=m.id WHERE m.account=? AND m.peer=? AND (a.reference_id=? OR m.source_id IN (?,?)) LIMIT 1", (binding["id"],peer,sid,"message:"+sid,"message:item:"+sid)).fetchone()
+                        cached=self._quoted_inbound(binding["id"],peer,sid)
                     quote_text=""
                     if cached:
                         resolved=cached["id"];status="cached_inbound";quote_text=cached["text"]
@@ -326,6 +341,8 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                     quoted=quoted.encode()[:budget].decode("utf-8",errors="ignore")
                     if quoted:
                         text="[引用缓存]\n"+quoted+"\n[/引用缓存]\n"+text
+                if self.native_messages and quotes:
+                    text = self.native_quote_prefix + text
                 self.db.execute(
                     "INSERT INTO messages(id,account,peer,source_id,text,created_at,context_token) "
                     "VALUES(?,?,?,?,?,?,?)",
@@ -338,6 +355,8 @@ class Store(AttachmentStore, WorkStore, NotificationStore):
                     self.db.execute("INSERT OR IGNORE INTO message_aliases VALUES(?,?,?,?)", (binding["id"],peer,alias,identifier))
                 for position,has_id,status,resolved,shape in quote_states:
                     self.db.execute("INSERT INTO message_quotes VALUES(?,?,?,?,?,?)", (identifier,position,has_id,status,resolved,shape))
+                if self.native_messages and quotes:
+                    self._record_compact_quotes(identifier, quotes)
                 from .timing import record as trace
                 trace(self,identifier,"received",at=received_at)
                 # Inline quote media and a cache hit may describe the same bytes.

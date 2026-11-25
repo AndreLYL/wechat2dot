@@ -170,8 +170,9 @@ def file_host_ok(host: str) -> bool:
 
 
 class DotClient:
-    def __init__(self, http, auth):
+    def __init__(self, http, auth, *, max_upload_bytes=MAX_FILE_BYTES):
         self.http, self.auth = http, auth
+        self.max_upload_bytes = max_upload_bytes
 
     async def _call(
         self,
@@ -281,7 +282,9 @@ class DotClient:
         )
 
     async def upload_file(self, room_id, name, mime, data, account_id=None) -> str:
-        if not data or len(data) > MAX_FILE_BYTES:
+        if not data:
+            raise FileUnavailable()
+        if len(data) > self.max_upload_bytes:
             raise FileTooLarge()
         resp = await self._call(
             "POST",

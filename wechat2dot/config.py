@@ -9,6 +9,8 @@ import tomllib
 
 from .platform import check_private_path, private_directory, safe_open, sync_directory
 
+DEFAULT_INBOUND_FILE_MIB = 20
+
 
 def atomic_file(path, contents):
     from uuid import uuid4
@@ -44,6 +46,11 @@ class Config:
     old_locks: str = ""
     legacy_state: str = ""
     credentials: str = "file" if Path("/.dockerenv").exists() else "keyring"
+    inbound_file_mib: int = DEFAULT_INBOUND_FILE_MIB
+
+    @property
+    def inbound_file_bytes(self) -> int:
+        return self.inbound_file_mib * 1024 * 1024
 
     def validate(self):
         if (
@@ -54,23 +61,29 @@ class Config:
             raise ValueError("invalid_config")
         if any(type(x) is not int or x <= 0 for x in (self.window, self.retention)):
             raise ValueError("invalid_window")
+        if type(self.inbound_file_mib) is not int or not 1 <= self.inbound_file_mib <= 64:
+            raise ValueError("invalid_inbound_file_mib")
         if any(type(v) is not bool for v in (self.auto_ping, self.caffeinate)):
             raise ValueError("invalid_config")
         if any(
             not isinstance(v, str)
             for k, v in asdict(self).items()
-            if k not in ("window", "retention", "auto_ping", "caffeinate")
+            if k not in ("window", "retention", "auto_ping", "caffeinate", "inbound_file_mib")
         ):
             raise ValueError("invalid_config")
         return self
 
     def save(self, root):
         self.validate()
+        settings = asdict(self)
+        if self.inbound_file_mib == DEFAULT_INBOUND_FILE_MIB:
+            # Older releases reject options they do not recognize.
+            del settings["inbound_file_mib"]
         atomic_file(
             root / "config.toml",
             "".join(
                 f"{k} = {json.dumps(v, ensure_ascii=False)}\n"
-                for k, v in asdict(self).items()
+                for k, v in settings.items()
             ),
         )
 
