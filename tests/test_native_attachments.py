@@ -27,7 +27,7 @@ CDN_URL = CDN_BASE + "/download?encrypted_query_param=fixture"
 class NativeAttachmentTests(unittest.IsolatedAsyncioTestCase):
     def test_default_config_round_trips_without_new_option(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
+            root = Path(tmp).resolve() / "config"
             Config().save(root)
             self.assertNotIn("inbound_file_mib", (root / "config.toml").read_text())
             self.assertEqual(Config.load(root).inbound_file_bytes, MAX_MEDIA)
@@ -46,7 +46,7 @@ class NativeAttachmentTests(unittest.IsolatedAsyncioTestCase):
         data = b"a" * (MAX_MEDIA + 1)
         key = bytes(range(16))
         with tempfile.TemporaryDirectory() as tmp, closing(
-            Store(Path(tmp).resolve())
+            Store(Path(tmp).resolve() / "state")
         ) as store:
             store.import_binding(
                 {
@@ -128,7 +128,7 @@ class NativeAttachmentDeliveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.store = NativeStore(Path(tmp.name).resolve())
+        self.store = NativeStore(Path(tmp.name).resolve() / "state")
         self.addCleanup(self.store.close)
         self.store.import_binding(
             dict(id="bot", owner="owner", token="fixture", base_url="https://ilinkai.weixin.qq.com")

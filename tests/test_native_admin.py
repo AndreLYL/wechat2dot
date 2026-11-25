@@ -474,8 +474,10 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             worker = asyncio.create_task(service_loop(root, cfg, s, stack))
             try:
                 async with asyncio.timeout(15):
-                    while not received or (
-                        not push_event and not read_after_delivery.is_set()
+                    while (
+                        not received
+                        or s.status()["outbox"].get("accepted") != 1
+                        or (not push_event and not read_after_delivery.is_set())
                     ):
                         if worker.done():
                             worker.result()
