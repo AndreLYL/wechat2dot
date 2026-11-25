@@ -11,12 +11,39 @@ from wechat2dot.dot.http import NetworkError, Response
 from wechat2dot.keepalive import Keepalive
 from wechat2dot.sync.cards import approval_view, update_cards
 from wechat2dot.sync.incoming import Incoming
-from wechat2dot.sync.room import RoomReader
+from wechat2dot.sync.room import RoomReader, weixin_text
 from wechat2dot.sync.store import NativeStore
 from wechat2dot.weixin import Outgoing, NotificationDispatch
 from wechat_dot_bridge.errors import BridgeError
 
 B = Binding("account", "dot", "room", ("agent",), ("owner",), "test")
+CODEX_URI = "codex://threads/00000000-0000-4000-8000-000000000001"
+
+
+class NativeLinkFormatting(unittest.TestCase):
+    def test_codex_addresses_are_copyable_without_touching_code_or_web_targets(self):
+        code = f"`{CODEX_URI}`"
+        web_url = f"https://example.com/?next=({CODEX_URI})"
+        preserved = (
+            web_url,
+            f"[网页]({web_url})",
+            f"<{web_url}>",
+            f"`[会话]({CODEX_URI})`",
+            f"```text\n**[会话]({CODEX_URI})**\n```",
+            f"~~~~text\n{CODEX_URI}\n~~~~",
+        )
+        for original, expected in (
+            (f"[会话](<http://{CODEX_URI}>)", f"会话（{code}）"),
+            (f"[http://{CODEX_URI}]({CODEX_URI})", code),
+            (f"<{CODEX_URI}>", code),
+            (f"链接https://{CODEX_URI}。", f"链接{code}。"),
+            (f"**{CODEX_URI}**", code),
+            (code, code),
+            *((item, item) for item in preserved),
+        ):
+            with self.subTest(original=original):
+                self.assertEqual(weixin_text(original), expected)
+                self.assertEqual(weixin_text(expected), expected)
 
 
 class Room:
@@ -118,6 +145,46 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         await self.reader.read()
         self.now += 2
         await self.reader.read()
+
+    async def test_outgoing_parts_keep_complete_links_inside_both_limits(self):
+        titled = '[官方 [发布页]](https://example.com/releases/Version_(2.9) "说明")'
+        autolink = "<https://example.com/Docs_(v2)?x=1>"
+        bare = "https://example.com/Docs_(v2)"
+        for i, (prefix, source, expected_link) in enumerate(
+            (
+                ("x" * 3798 + "\n", titled, titled),
+                ("文" * 2727 + "\n", autolink, autolink),
+                ("x" * 3798 + "\n", bare + "。", bare),
+                ("文" * 2727 + "\n", f"<{CODEX_URI}>", f"`{CODEX_URI}`"),
+            )
+        ):
+            with self.subTest(link=expected_link):
+                self.wx.calls.clear()
+                self.add(f"link-{i}", prefix + source)
+                await self.stable()
+                while await self.out.tick():
+                    pass
+                parts = [call["text"] for call in self.wx.calls]
+                self.assertEqual(len(parts), 2)
+                self.assertEqual(parts[0], prefix)
+                self.assertIn(expected_link, parts[1])
+                self.assertEqual("".join(parts), weixin_text(prefix + source))
+                self.assertTrue(
+                    all(len(part) <= 3800 and len(part.encode()) <= 8192 for part in parts)
+                )
+
+    async def test_outgoing_oversized_link_still_honors_payload_limits(self):
+        url = "https://example.com/" + "路径" * 1500
+        self.add("oversized-link", url)
+        await self.stable()
+        while await self.out.tick():
+            pass
+        parts = [call["text"] for call in self.wx.calls]
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(parts), url)
+        self.assertTrue(
+            all(len(part) <= 3800 and len(part.encode()) <= 8192 for part in parts)
+        )
 
     async def test_initial_link_and_final_text(self):
         it = self.add("stream", "partial", status="streaming")

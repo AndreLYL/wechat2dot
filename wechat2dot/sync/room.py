@@ -19,16 +19,59 @@ from .cards import approval_view, linked_tasks
 from .store import digest, packed
 
 
+_CODEX_THREAD = r"codex://threads/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+_THREAD_DESTINATION = rf"(?:https?://)?{_CODEX_THREAD}"
+_THREAD_URL = re.compile(rf"(?:https?://)?(?P<uri>{_CODEX_THREAD})", re.IGNORECASE)
+_ANGLE_WEB_URL = r"https?://[^\s<>]+"
+_MARKDOWN_WEB_URL = r"https?://(?:[^\s()<>\\]|\\[^\r\n]|\([^\s()]*\))+"
+_URL_GROUP = r"\([^\s<>`\"()]*\)|\[[^\s<>`\"\[\]]+\]"
+_BARE_WEB_URL = (
+    rf"https?://(?:[^\s<>`\"()\[\]，。！？；、]|{_URL_GROUP})*"
+    rf"(?:[^\s<>`\"()\[\]，。！？；、.,!?;:]|{_URL_GROUP})"
+)
+_LINK = (
+    r"(?<!!)\[(?P<label>(?:[^\[\]\\\r\n]|\\[^\r\n]|\[[^\[\]\r\n]*\])*+)\]\("
+    rf"(?P<destination><(?:{_THREAD_DESTINATION}|{_ANGLE_WEB_URL})>"
+    rf"|{_THREAD_DESTINATION}|{_MARKDOWN_WEB_URL})"
+    r"""(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?\)"""
+    rf"|<(?P<autolink>{_THREAD_DESTINATION}|{_ANGLE_WEB_URL})>"
+    rf"|(?P<bare_codex>(?<![A-Za-z0-9_./:=?&#%+-]){_THREAD_DESTINATION}"
+    r"(?![A-Za-z0-9_/?&#%=-]))"
+    rf"|{_BARE_WEB_URL}"
+)
+
+_MARKUP = re.compile(
+    r"^ {0,3}(?P<fence>(?P<fence_char>`|~)(?P=fence_char){2,})[^\r\n]*(?:\r?\n|\Z)"
+    r"[\s\S]*?(?:^ {0,3}(?P=fence)(?P=fence_char)*[ \t]*(?:\r?\n|\Z)|\Z)"
+    r"|(?<!`)(?P<ticks>`{1,2})(?!`)[^\r\n]*?(?<!`)(?P=ticks)(?!`)"
+    rf"|{_LINK}"
+    r"|(?P<heading>^#{1,6}[ \t]+)|\*\*(?P<strong>[^*\r\n]+)\*\*",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PROTECTED_LINK = re.compile(rf"`{_CODEX_THREAD}`|{_LINK}", re.IGNORECASE)
+
+
+def _render_markup(match):
+    if match["heading"]:
+        return ""
+    if match["strong"]:
+        return weixin_text(match["strong"])
+    destination = match["destination"] or match["autolink"] or match["bare_codex"]
+    thread = _THREAD_URL.fullmatch(destination.strip("<>")) if destination else None
+    if not thread:
+        return match.group()
+    uri = thread["uri"]
+    code = f"`{uri}`"
+    label = match["label"]
+    label_thread = _THREAD_URL.fullmatch(label.strip()) if label else None
+    if label and (not label_thread or label_thread["uri"].lower() != uri.lower()):
+        return f"{label}（{code}）"
+    return code
+
+
 def weixin_text(text):
-    # Preserve code blocks and URLs; make Markdown links readable in plain text.
-    chunks = re.split(r"(```[\s\S]*?```)", text)
-    for i in range(0, len(chunks), 2):
-        chunks[i] = re.sub(
-            r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", r"\1 (\2)", chunks[i]
-        )
-        chunks[i] = re.sub(r"(?m)^#{1,6}\s+", "", chunks[i])
-        chunks[i] = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", chunks[i])
-    return "".join(chunks)
+    """Render copyable Codex addresses and preserve ordinary links and code."""
+    return _MARKUP.sub(_render_markup, text)
 
 
 class RoomReader:
@@ -192,10 +235,14 @@ class RoomReader:
             if text
             else None
         )
+        rendered = weixin_text(text) if text and not direct else ""
         parts = (
-            []
-            if not text or direct
-            else [("text", part) for part in split_text(weixin_text(text))]
+            [
+                ("text", part)
+                for part in split_text(rendered, keep_together=_PROTECTED_LINK)
+            ]
+            if rendered
+            else []
         )
         if text and not direct:
             s.db.execute(

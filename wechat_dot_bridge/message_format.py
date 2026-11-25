@@ -2,14 +2,32 @@
 import hashlib
 
 
-def split_text(text, max_chars=3800, max_bytes=8192):
-    chunks, current, size = [], [], 0
-    for char in text:
-        count = len(char.encode('utf-8'))
-        if current and (len(current) >= max_chars or size + count > max_bytes):
+def _text_units(text, keep_together, max_chars, max_bytes):
+    offset = 0
+    for match in keep_together.finditer(text):
+        yield from text[offset:match.start()]
+        unit = match.group()
+        if len(unit) <= max_chars and len(unit.encode("utf-8")) <= max_bytes:
+            yield unit
+        else:
+            yield from unit
+        offset = match.end()
+    yield from text[offset:]
+
+
+def split_text(text, max_chars=3800, max_bytes=8192, *, keep_together=None):
+    chunks, current, chars, size = [], [], 0, 0
+    units = (
+        text if keep_together is None
+        else _text_units(text, keep_together, max_chars, max_bytes)
+    )
+    for unit in units:
+        count = len(unit.encode("utf-8"))
+        if current and (chars + len(unit) > max_chars or size + count > max_bytes):
             chunks.append(''.join(current))
-            current, size = [], 0
-        current.append(char)
+            current, chars, size = [], 0, 0
+        current.append(unit)
+        chars += len(unit)
         size += count
     if current:
         chunks.append(''.join(current))
@@ -58,6 +76,22 @@ def quote_content(ref):
     if not text and not media:
         text = '[引用内容暂不可用]'
     return text[:16384], media
+
+
+def compact_quote_text(text, limit=64):
+    if not isinstance(text, str):
+        return ""
+    line = " ".join(text.split())
+    if len(line) > limit:
+        line = line[:limit - 1] + "…"
+    return line.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def compact_attachment_quote(kind, name=None):
+    label = {"image": "图片", "file": "文件", "video": "视频", "voice": "语音"}.get(kind, "附件")
+    if isinstance(name, str) and name.strip():
+        return label + "《" + compact_quote_text(name, 64 - len(label) - 2) + "》"
+    return label
 
 
 def markdown_to_text(text):
