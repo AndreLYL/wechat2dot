@@ -2,6 +2,10 @@
 import hashlib
 
 
+MAX_TEXT_CHARS = 3800
+MAX_TEXT_BYTES = 8192
+
+
 def _text_units(text, keep_together, max_chars, max_bytes):
     offset = 0
     for match in keep_together.finditer(text):
@@ -15,7 +19,7 @@ def _text_units(text, keep_together, max_chars, max_bytes):
     yield from text[offset:]
 
 
-def split_text(text, max_chars=3800, max_bytes=8192, *, keep_together=None):
+def split_text(text, max_chars=MAX_TEXT_CHARS, max_bytes=MAX_TEXT_BYTES, *, keep_together=None):
     chunks, current, chars, size = [], [], 0, 0
     units = (
         text if keep_together is None

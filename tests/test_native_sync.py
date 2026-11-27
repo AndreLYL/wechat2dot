@@ -1,9 +1,10 @@
 """End-to-end native transfer at the two transport boundaries. All accounts are fixtures."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from wechat2dot.config import Config
 from wechat2dot.dot.client import Binding, DotProtocolError
@@ -194,11 +195,101 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         it["status"] = "completed"
         await self.stable()
         await self.out.tick()
-        self.assertEqual([r["text"] for r in self.wx.calls], ["完整"])
+        self.assertEqual([r["text"] for r in self.wx.calls], ["**完整**"])
         it["content"]["text"] = "edited"
         await self.stable()
         self.assertFalse(await self.out.tick())
         self.assertEqual(self.s.history()["changed_after_freeze"], 1)
+
+    async def test_layout_reply_preserves_attachment_order_and_linked_task(self):
+        command = f"````text\n**查找**\n{CODEX_URI}\n````"
+        web = '[运行手册](https://example.com/Guide_(v2) "手册")'
+        inline = f"```[字面会话]({CODEX_URI})```"
+        source = (
+            "## 同步进度\n\n"
+            "| 模块 | 结果 | 耗时 | 下一步 |\n"
+            "| --- | --- | --- | --- |\n"
+            "| 消息同步 | 已读到回复 | 约 17 秒 | 核对手机收到回执的时间 |\n\n"
+            f"{command}\n\n{web}，也可以看 **[会话 `测试`]({CODEX_URI})**。\n\n"
+            f"字面写法 {inline}。"
+        )
+        item = self.add("formatted", source)
+        item["content"]["attachments"] = [
+            {"type": "thread", "thread_id": "attached"},
+            {"type": "file", "file_id": "file-one"},
+            {"type": "file", "file_id": "file-two"},
+        ]
+        self.room.download_file = AsyncMock(
+            side_effect=[
+                (b"first", "first.txt", "text/plain"),
+                (b"second", "second.txt", "text/plain"),
+            ]
+        )
+        await self.stable()
+        while await self.out.tick():
+            pass
+        reply, first, second = self.wx.calls
+        body = reply["text"]
+        for expected in (
+            "## 同步进度",
+            "模块",
+            "结果",
+            "耗时",
+            "下一步",
+            "消息同步",
+            "已读到回复",
+            "约 17 秒",
+            "核对手机收到回执的时间",
+            command,
+            web,
+            f"**会话 `测试`（`{CODEX_URI}`）**",
+            inline,
+        ):
+            self.assertIn(expected, body)
+        self.assertNotIn("| 模块 |", body)
+        self.assertEqual(
+            [first["attachment"]["data"], second["attachment"]["data"]],
+            [b"first", b"second"],
+        )
+        self.room.task_status = AsyncMock(return_value=("整理文件", "inProgress"))
+        await update_cards(self.s, self.room, B)
+        self.assertTrue(await self.out.tick())
+        self.assertEqual(self.wx.calls[-1]["text"], "任务：整理文件（进行中）")
+
+    async def test_layout_error_sends_reply_through_legacy_path(self):
+        self.add("broken-layout", "## 进度\n\n**完整**")
+        with patch("wechat2dot.sync.room.layout_blocks", side_effect=RuntimeError):
+            await self.stable()
+        self.assertTrue(await self.out.tick())
+        self.assertEqual(self.wx.calls[0]["text"], "进度\n\n完整")
+        self.assertEqual(self.s.history()["reply_layout_fallback"], 1)
+
+    async def test_formatted_parts_reuse_persisted_text_and_ids_on_retry(self):
+        item = self.add("retry-layout", "## 进度\n\n" + "文" * 3000)
+        await self.stable()
+        stored = [
+            (part_id, json.loads(body))
+            for part_id, body in self.s.db.execute(
+                "SELECT id,body FROM native_out WHERE source=? ORDER BY part",
+                ("retry-layout",),
+            )
+        ]
+        self.assertGreater(len(stored), 1)
+        self.assertTrue(stored[0][1].startswith("## 进度\n\n"))
+        self.wx.result = BridgeError("http_rate_limited")
+        self.assertTrue(await self.out.tick())
+        retry_at = self.s.get("wx_retry")
+        self.s.close()
+        self.open()
+        self.s.recover()
+        self.now = retry_at + 1
+        self.wx.result = {}
+        item["content"]["text"] = "## 编辑后的文字"
+        await self.stable()
+        while await self.out.tick():
+            pass
+        sent = [(reply["client_id"], reply["text"]) for reply in self.wx.calls]
+        self.assertEqual(sent, stored[:1] + stored)
 
     async def test_weixin_attachment_and_voice_transcript_enter_primary_room(self):
         def inbound_media(source, kind, name, body):
@@ -270,11 +361,12 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.wx.calls[0]["text"], "same")
 
     async def test_reverse_notification_dedup(self):
-        self.add("mirrored", "same text")
+        text = "## 同一个通知\n\n**同一条正文**"
+        self.add("mirrored", text)
         await self.stable()
         await self.out.tick()
         self.s.configure_notifications(enabled=True)
-        queued = self.s.queue_notification("same text", "later", self.now + 150)
+        queued = self.s.queue_notification(text, "later", self.now + 150)
         NotificationDispatch(self.s, self.wx).tick()
         self.assertEqual(len(self.wx.calls), 1)
         self.assertEqual(
@@ -517,17 +609,19 @@ asyncio.run(Outgoing(s, None, None, client=Interrupted()).tick())
         self,
     ):
         self.s.configure_notifications(enabled=True)
-        self.s.queue_notification("same", "source", self.now + 300)
+        text = "## 同一个通知\n\n**同一条正文**"
+        self.s.queue_notification(text, "source", self.now + 300)
         claim = self.s.claim_notification()
         self.s.finish_notification(claim["notification_id"], "accepted")
         self.s.db.execute("UPDATE native_direct SET at=?", (self.now,))
-        self.add("copied", "same")
+        self.add("copied", text)
         await self.stable()
         self.assertFalse(await self.out.tick())
         self.now += 610
-        self.add("new", "same")
+        self.add("new", text)
         await self.stable()
         self.assertTrue(await self.out.tick())
+        self.assertEqual(self.wx.calls[0]["text"], text)
 
     async def test_unknown_protocol_does_not_advance_anchor(self):
         self.room.items.append({"id": "bad", "created_at": self.now})
@@ -548,7 +642,7 @@ asyncio.run(Outgoing(s, None, None, client=Interrupted()).tick())
         ping.assert_awaited_once()
 
     async def test_approval_requires_current_request_and_offered_option(self):
-        item = self.add("ask", "")
+        item = self.add("ask", "**审批检查**")
         data = {
             "request_id": "req",
             "thread_id": "t",
@@ -567,6 +661,11 @@ asyncio.run(Outgoing(s, None, None, client=Interrupted()).tick())
         item["content"]["elicitation"] = data
         await self.stable()
         code = self.s.db.execute("select code from native_approvals").fetchone()[0]
+        self.assertTrue(await self.out.tick())
+        self.assertEqual(
+            self.wx.calls[0]["text"],
+            "审批检查\n" + approval_view(data).describe(code),
+        )
         self.room.approval_details = AsyncMock(
             return_value={
                 "elicitation": data,

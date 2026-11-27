@@ -16,6 +16,8 @@ from wechat2dot.dot.client import (
     timestamp_of,
 )
 from .cards import approval_view, linked_tasks
+from .layout_blocks import layout_blocks
+from .layout_split import split_layout
 from .store import digest, packed
 
 
@@ -49,6 +51,10 @@ _MARKUP = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _PROTECTED_LINK = re.compile(rf"`{_CODEX_THREAD}`|{_LINK}", re.IGNORECASE)
+_INLINE_CODE = (
+    r"(?<![\\`])(?:\\\\)*(?P<code_ticks>`++)[\s\S]*?(?<!`)(?P=code_ticks)(?!`)"
+)
+_MARKDOWN_LINKS = re.compile(rf"{_INLINE_CODE}|{_LINK}", re.IGNORECASE)
 
 
 def _render_markup(match):
@@ -56,6 +62,10 @@ def _render_markup(match):
         return ""
     if match["strong"]:
         return weixin_text(match["strong"])
+    return _render_link(match)
+
+
+def _render_link(match):
     destination = match["destination"] or match["autolink"] or match["bare_codex"]
     thread = _THREAD_URL.fullmatch(destination.strip("<>")) if destination else None
     if not thread:
@@ -72,6 +82,15 @@ def _render_markup(match):
 def weixin_text(text):
     """Render copyable Codex addresses and preserve ordinary links and code."""
     return _MARKUP.sub(_render_markup, text)
+
+
+def _render_markdown_links(text):
+    return _MARKDOWN_LINKS.sub(_render_link, text)
+
+
+def _legacy_parts(text):
+    rendered = weixin_text(text)
+    return split_text(rendered, keep_together=_PROTECTED_LINK) if rendered else []
 
 
 class RoomReader:
@@ -237,16 +256,10 @@ class RoomReader:
             if text
             else None
         )
-        rendered = weixin_text(text) if text and not direct else ""
-        parts = (
-            [
-                ("text", part)
-                for part in split_text(rendered, keep_together=_PROTECTED_LINK)
-            ]
-            if rendered
-            else []
-        )
+        parts = []
         if text and not direct:
+            fragments = self._reply_parts(text, mid, approval)
+            parts.extend(("text", part) for part in fragments)
             s.db.execute(
                 "INSERT OR IGNORE INTO native_text(source,digest) VALUES(?,?)",
                 (mid, digest(text)),
@@ -257,3 +270,17 @@ class RoomReader:
         for n, (kind, body) in enumerate(parts):
             s.enqueue(mid, n, stamp, kind, body)
         s.db.execute("UPDATE native_seen SET state='frozen' WHERE id=?", (mid,))
+
+    def _reply_parts(self, text, mid, approval):
+        if approval:
+            return _legacy_parts(text)
+        try:
+            blocks = layout_blocks(text, render_links=_render_markdown_links)
+            fragments = split_layout(blocks, keep_together=_MARKDOWN_LINKS)
+        except Exception:
+            # A local rendering error must not block this room or log private text.
+            fragments = []
+        if fragments:
+            return fragments
+        self.s.event("reply_layout_fallback", mid)
+        return _legacy_parts(text)
