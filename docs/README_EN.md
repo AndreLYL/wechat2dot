@@ -12,6 +12,14 @@ Install with `curl -fsSL https://raw.githubusercontent.com/AndreLYL/wechat2dot/m
 
 New messages are mirrored from link time. Supported content includes text, files and images up to 20 MiB, task milestones and simple approvals. A separate notification-only MCP process can enqueue scheduled messages. Desktop credentials use the system keyring. Container credentials and the queue live in an owner-only volume. Native mode uses an undocumented ChatGPT interface and a device authorization with broader permissions than the selected room.
 
+## Reply formatting in WeChat
+
+Native mode automatically formats ordinary replies sent from the primary DOT room to WeChat. Short plain-text replies stay as written. Headings, lists, compact tables and code blocks retain their structure. Wide tables become labeled entries, one per row, so each field is readable on a phone. Long replies split at paragraph or list boundaries where possible to keep links and code blocks intact.
+
+On WeChat for iPhone, we tested the expanded table layout and verified that copying a code block preserves line breaks, indentation and literal characters.
+
+This feature is available from the `main` source checkout. The installer uses a fixed GitHub Release. To try the source version, run `uv run --frozen wechat2dot setup` from the checkout.
+
 ## When delivery pauses
 
 Run `wechat2dot status --json` or `wechat2dot doctor --live`. After a WeChat context expires, send `/ping` to reopen it. A catch-up summary precedes retained messages. Check uncertain deliveries at their destination before taking action. On macOS the optional Accessibility helper can refresh the window while the desktop is unlocked and idle.
