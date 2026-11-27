@@ -34,6 +34,10 @@ from .vault import token_store
 from .weixin import NotificationDispatch, Outgoing
 
 
+ROOM_IDLE_RECHECK = 15
+ROOM_ACTIVE_WINDOW = 120
+
+
 async def discover(client, auth, config, choose=None):
     _, account = await auth.access()
     if config.account_id and config.account_id != account:
@@ -86,7 +90,8 @@ async def service_loop(root, config, s, stack):
     checked_room = False
     retry_until = 0
     last_sweep = 0
-    last_active = 0
+    last_active = None
+    pending_room_event = False
     health = {"wx": time.monotonic(), "dot": time.monotonic()}
     reader = RoomReader(s, dot, b)
     inbox = Incoming(s, dot, b, config.window)
@@ -105,10 +110,12 @@ async def service_loop(root, config, s, stack):
         force = True
         wake.set()
 
-    def event(room, _):
-        nonlocal last_active
+    def event(room, kind):
+        nonlocal last_active, pending_room_event
         if room == b.room_id:
             last_active = time.monotonic()
+            if kind != "inbound":
+                pending_room_event = True
             wake.set()
 
     live = DotLive(dot, event, resync)
@@ -128,9 +135,11 @@ async def service_loop(root, config, s, stack):
 
     async def room_loop():
         nonlocal force, checked_room, retry_until, last_sweep, last_active
+        nonlocal pending_room_event
         failures = 0
         while not stop.is_set():
             wake.clear()
+            read_for_event, pending_room_event = pending_room_event, False
             health["dot"] = time.monotonic()
             try:
                 if not checked_room:
@@ -143,7 +152,8 @@ async def service_loop(root, config, s, stack):
                 previous_head = s.get("head")
                 await reader.read(full=sweep)
                 checked_room = True
-                if s.get("head") != previous_head:
+                head_changed = s.get("head") != previous_head
+                if head_changed:
                     last_active = time.monotonic()
                 if sweep:
                     s.prune_sent_references(config.retention)
@@ -159,16 +169,12 @@ async def service_loop(root, config, s, stack):
                 waiting = s.db.execute(
                     "SELECT 1 FROM native_seen WHERE state IN ('observing','streaming') LIMIT 1"
                 ).fetchone()
-                # Reconcile missed room events even while the socket stays connected.
-                delay = (
-                    2
-                    if waiting
-                    else (
-                        15
-                        if live.connected
-                        else (2 if time.monotonic() - last_active < 900 else 60)
-                    )
-                )
+                active_window = ROOM_ACTIVE_WINDOW if live.connected else 900
+                active = last_active is not None and time.monotonic() - last_active < active_window
+                delay = 2 if waiting or active else ROOM_IDLE_RECHECK
+                if read_for_event and not head_changed and not waiting:
+                    # The socket notification can precede visibility in the room read.
+                    delay = 1
             except (
                 AuthRequired,
                 AccountChanged,

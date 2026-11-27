@@ -308,14 +308,20 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
         await self._round_trip(push_event=True)
 
     async def test_connected_room_rechecks_and_forwards_when_push_event_is_missing(self):
+        await self._round_trip(push_event=False, idle=True)
+
+    async def test_active_room_rechecks_quickly_without_a_push_event(self):
         await self._round_trip(push_event=False)
+
+    async def test_room_rechecks_after_an_event_precedes_message_visibility(self):
+        await self._round_trip(push_event=False, early_event=True)
 
     async def test_outbound_delivery_continues_during_slow_inbound_work(self):
         for stage in ("download", "upload"):
             with self.subTest(stage=stage):
                 await self._round_trip(push_event=True, blocked_stage=stage)
 
-    async def _round_trip(self, *, push_event, blocked_stage=None):
+    async def _round_trip(self, *, push_event, blocked_stage=None, early_event=False, idle=False):
         from contextlib import ExitStack
         from threading import Event
         import time
@@ -331,6 +337,8 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
 
         reply_added = asyncio.Event()
         read_before_reply = asyncio.Event()
+        event_sent = asyncio.Event()
+        read_after_event = asyncio.Event()
         read_after_delivery = asyncio.Event()
         recheck_delays = []
         received = []
@@ -357,6 +365,8 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
                 page = list(self.messages_by_id)
                 if self.posts and not reply_added.is_set():
                     read_before_reply.set()
+                    if event_sent.is_set():
+                        read_after_event.set()
                 if received:
                     read_after_delivery.set()
                 return page
@@ -374,6 +384,8 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
                 )
                 if not push_event:
                     await read_before_reply.wait()
+                if early_event:
+                    await read_after_event.wait()
                 self.messages_by_id.append(
                     dict(
                         id="answered",
@@ -394,6 +406,10 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             async def run(self):
                 if push_event:
                     await reply_added.wait()
+                    self.event("room", "message")
+                elif early_event:
+                    await read_before_reply.wait()
+                    event_sent.set()
                     self.event("room", "message")
                 await asyncio.Event().wait()
 
@@ -456,6 +472,8 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
             )
             stack.enter_context(patch("wechat2dot.native.DotClient", return_value=room))
             stack.enter_context(patch("wechat2dot.native.DotLive", Socket))
+            if idle:
+                stack.enter_context(patch("wechat2dot.native.ROOM_ACTIVE_WINDOW", 0))
             if blocked_stage == "download":
                 stack.enter_context(
                     patch("wechat2dot.native.MediaWorker.tick", side_effect=slow_download)
@@ -487,7 +505,10 @@ class NativeDaemon(unittest.IsolatedAsyncioTestCase):
                 if blocked_stage:
                     self.assertTrue(slow_started.is_set())
                 if not push_event:
-                    self.assertEqual(recheck_delays, [15])
+                    expected_delays = [15] if idle else [2]
+                    if early_event:
+                        expected_delays.append(1)
+                    self.assertEqual(recheck_delays, expected_delays)
                 self.assertEqual(s.status()["outbox"], {"accepted": 1})
                 self.assertEqual(s.status()["inbox"], {"accepted": 1})
             except TimeoutError:
