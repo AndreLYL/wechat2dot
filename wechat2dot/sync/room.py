@@ -215,7 +215,9 @@ class RoomReader:
         version = digest(packed([text, files, tasks]))
         row = s.db.execute("SELECT * FROM native_seen WHERE id=?", (mid,)).fetchone()
         if row and row["state"] == "frozen":
-            if row["digest"] != version:
+            if row["digest"] != version and not in_progress(item):
+                if files:
+                    s.enqueue_late_files(mid, stamp, files)
                 s.event("changed_after_freeze", mid)
                 s.db.execute(
                     "UPDATE native_seen SET digest=? WHERE id=?", (version, mid)
@@ -269,6 +271,7 @@ class RoomReader:
         parts.extend(("file", file) for file in files)
         for n, (kind, body) in enumerate(parts):
             s.enqueue(mid, n, stamp, kind, body)
+        s.remember_outbound_files(mid, files)
         s.db.execute("UPDATE native_seen SET state='frozen' WHERE id=?", (mid,))
 
     def _reply_parts(self, text, mid, approval):
