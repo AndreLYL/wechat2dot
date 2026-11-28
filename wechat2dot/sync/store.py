@@ -68,6 +68,9 @@ class NativeStore(Store):
                 kind TEXT NOT NULL, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued',
                 attempts INTEGER NOT NULL DEFAULT 0, retry REAL NOT NULL DEFAULT 0, priority INTEGER DEFAULT 1);
             CREATE INDEX IF NOT EXISTS native_dispatch ON native_out(state,priority,stamp,source,part);
+            CREATE TABLE IF NOT EXISTS native_out_files(
+                source TEXT PRIMARY KEY REFERENCES native_seen(id) ON DELETE CASCADE,
+                file_keys TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS native_in(
                 mid TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, state TEXT NOT NULL,
                 attempts INTEGER DEFAULT 0,retry REAL DEFAULT 0);
@@ -197,6 +200,37 @@ class NativeStore(Store):
 
     def notice(self, source, text, priority=0):
         self.enqueue(source, 0, self.clock(), "text", text, priority)
+
+    def remember_outbound_files(self, source, files):
+        keys = sorted({digest(file["file_id"]) for file in files})
+        self.db.execute(
+            "INSERT INTO native_out_files(source,file_keys) VALUES(?,?)", (source, packed(keys))
+        )
+
+    def enqueue_late_files(self, source, stamp, files):
+        record = self.db.execute(
+            "SELECT file_keys FROM native_out_files WHERE source=?", (source,)
+        ).fetchone()
+        if record is None:
+            # Older frozen replies no longer have file IDs for accepted parts.
+            return
+        known = set(json.loads(record["file_keys"]))
+        new_files = []
+        for file in files:
+            key = digest(file["file_id"])
+            if key not in known:
+                new_files.append(file)
+                known.add(key)
+        if new_files:
+            first_part = self.db.execute(
+                "SELECT coalesce(max(part),-1)+1 FROM native_out WHERE source=?", (source,)
+            ).fetchone()[0]
+            for part, file in enumerate(new_files, first_part):
+                self.enqueue(source, part, stamp, "file", file)
+            self.db.execute(
+                "UPDATE native_out_files SET file_keys=? WHERE source=?",
+                (packed(sorted(known)), source),
+            )
 
     def _record_compact_quotes(self, message_id, quotes):
         binding = self._binding()

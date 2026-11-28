@@ -201,6 +201,79 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.out.tick())
         self.assertEqual(self.s.history()["changed_after_freeze"], 1)
 
+    async def test_files_appended_to_a_completed_reply_are_forwarded_once(self):
+        names = ("one", "two", "three", "four", "five")
+        files = [{"type": "file", "file_id": name} for name in names]
+        self.room.download_file = AsyncMock(
+            side_effect=lambda room, key, account: (key.encode(), key + ".png", "image/png")
+        )
+        item = self.add("album", "First version")
+        item["content"]["attachments"] = files[:2]
+        await self.stable()
+        while await self.out.tick():
+            pass
+        self.assertEqual(len(self.wx.calls), 3)
+
+        self.s.close()
+        self.open()
+        item["status"] = "generating"
+        item["content"] = {
+            "text": "Edited caption",
+            "attachments": [files[1], files[0], *files[2:], files[2]],
+        }
+        await self.reader.read()
+        self.assertFalse(await self.out.tick())
+        item["status"] = "completed"
+        await self.stable()
+        while await self.out.tick():
+            pass
+        await self.reader.read(full=True)
+        self.assertFalse(await self.out.tick())
+        self.assertEqual([p["text"] for p in self.wx.calls if "text" in p], ["First version"])
+        self.assertEqual(
+            [p["attachment"]["name"] for p in self.wx.calls if "attachment" in p],
+            [name + ".png" for name in names],
+        )
+
+    async def test_legacy_accepted_album_is_not_replayed_on_edit(self):
+        item = self.add("legacy-album", "Previously forwarded")
+        item["content"]["attachments"] = [{"type": "file", "file_id": "old"}]
+        self.s.db.execute(
+            "INSERT INTO native_seen VALUES(?,?,?,?,?,'frozen')",
+            ("legacy-album", self.now, "previous", self.now, self.now),
+        )
+        self.s.db.execute(
+            """INSERT INTO native_out(id,source,part,stamp,kind,body,state)
+               VALUES(?,?,?,?,?,'null','accepted')""",
+            ("legacy-part", "legacy-album", 0, self.now, "file"),
+        )
+        await self.stable()
+        self.assertFalse(await self.out.tick())
+        self.assertEqual(self.wx.calls, [])
+
+    async def test_first_late_file_does_not_replay_an_uncertain_send(self):
+        item = self.add("text-first", "Caption")
+        await self.stable()
+        self.assertTrue(await self.out.tick())
+        attachments = [{"type": "file", "file_id": "first"}]
+        item["content"]["attachments"] = attachments
+        self.wx.result = BridgeError("network_timeout")
+        await self.stable()
+        self.assertTrue(await self.out.tick())
+
+        self.s.close()
+        self.open()
+        self.wx.result = {}
+        attachments.append({"type": "file", "file_id": "second"})
+        await self.stable()
+        self.assertTrue(await self.out.tick())
+        self.assertFalse(await self.out.tick())
+        parts = list(self.s.db.execute(
+            "SELECT part,state FROM native_out WHERE source=? ORDER BY part", ("text-first",)
+        ))
+        self.assertEqual([tuple(p) for p in parts], [(0, "accepted"), (1, "uncertain"), (2, "accepted")])
+        self.assertEqual(len(self.wx.calls), 3)
+
     async def test_layout_reply_preserves_attachment_order_and_linked_task(self):
         command = f"````text\n**查找**\n{CODEX_URI}\n````"
         web = '[运行手册](https://example.com/Guide_(v2) "手册")'
