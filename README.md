@@ -4,6 +4,12 @@
 
 [English](docs/README_EN.md) · [原生运行、排错与迁移](docs/NATIVE.md) · [Docker](docs/DOCKER.md) · [0.2 官方模式](docs/GETTING_STARTED.md)
 
+## 社区交流
+
+欢迎加入「AI Native 交流群」，和其他开发者交流 wechat2dot、Personal Agent、MCP 集成和 AI 自动化实践，一起完善开源项目。
+
+[微信扫码加入（最新群二维码及有效期）](docs/COMMUNITY.md) · [Bug 反馈和功能建议](https://github.com/AndreLYL/wechat2dot/issues)
+
 ## 第一次使用
 
 **2.0.0a2 是预发布版。** macOS / Linux 可从终端直接安装：
