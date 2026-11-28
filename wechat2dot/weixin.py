@@ -187,7 +187,7 @@ class Outgoing:
             if not error:
                 state = "accepted"
             elif error == "context_required" or (
-                error == "possible_context_expired" and age > 3600
+                error == "possible_context_expired" and (age > 3600 or row["attempts"] >= 2)
             ):
                 state = "waiting_context"
                 s.put("closed_context", digest(ctx["context_token"]))
@@ -258,8 +258,9 @@ class Outgoing:
                 )
             if error:
                 s.event(error, row["id"])
-            if state == "accepted" and row["priority"] == 1:
-                s.remember_sent_reference(binding, row["source"], response, reply)
+            if state == "accepted":
+                source = row["source"] if row["priority"] == 1 else None
+                s.remember_sent_reference(binding, source, response, reply)
         return True
 
 

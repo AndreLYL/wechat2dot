@@ -530,6 +530,38 @@ asyncio.run(Outgoing(s, None, None, client=Interrupted()).tick())
         await self.out.tick()
         self.assertGreaterEqual(self.s.get("wx_retry"), self.now + 91)
 
+    async def test_rejected_album_resumes_only_unsent_parts_with_fresh_context(self):
+        self.room.download_file = AsyncMock(side_effect=lambda room, fid, account: (
+            b"fixture", fid + ".png", "image/png"
+        ))
+        album = self.add("album", "Album")
+        names = [f"image-{n}" for n in range(5)]
+        album["content"]["attachments"] = [{"type": "file", "file_id": name} for name in names]
+        await self.stable()
+        self.wx.result = {"ret": 0}
+        for _ in range(3):
+            self.assertTrue(await self.out.tick())
+        self.wx.result = {"ret": -2, "errmsg": "prepare failed"}
+        for gap in (0, 30, 60):
+            self.now += gap
+            self.assertTrue(await self.out.tick())
+        rejected = self.wx.calls[-3:]
+        self.assertEqual(len({part["client_id"] for part in rejected}), 1)
+        self.assertEqual(self.s.status()["outbox"], {"accepted": 3, "waiting_context": 3})
+        self.assertFalse(await self.out.tick())
+
+        self.s.close()
+        self.open()
+        self.inbound("Continue", "fresh", "context2")
+        self.wx.result = {"ret": 0}
+        while await self.out.tick():
+            pass
+        recovered = [part for part in self.wx.calls if part["context_token"] == "context2"
+                     and "attachment" in part]
+        self.assertEqual([p["attachment"]["name"] for p in recovered], [n + ".png" for n in names[2:]])
+        self.assertEqual(recovered[0]["client_id"], rejected[0]["client_id"])
+        self.assertEqual(self.s.status()["outbox"], {"accepted": 7})
+
     async def test_owner_message_echo_reconciliation_after_restart(self):
         self.inbound("hello", "message", "c")
         self.room.behavior = NetworkError()

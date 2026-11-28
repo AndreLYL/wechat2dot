@@ -6,8 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+from wechat2dot.config import Config
 from wechat2dot.dot.client import Binding
 from wechat2dot.dot.http import Response
+from wechat2dot.keepalive import Keepalive
 from wechat2dot.sync.incoming import Incoming
 from wechat2dot.sync.room import RoomReader
 from wechat2dot.sync.store import NativeStore
@@ -156,6 +158,60 @@ class NativeQuoteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(second[3])
         self.assertEqual(first[1], second[1])
         self.assertEqual(second[0], "A reply to it\n\n[微信引用 · 用户原消息] The original message")
+
+    async def test_id_only_quote_of_window_notice_survives_restart(self):
+        self.receive(110, "Initial context")
+        await self.incoming.tick(self.read)
+        self.now += 21 * 3600
+        await Keepalive(self.store, Config(auto_ping=False)).tick()
+        receipt_id = 18446744073709551601
+        send = Mock(return_value={"ret": 0, "message_id": receipt_id})
+        out = Outgoing(self.store, self.dot, self.binding, client=SimpleNamespace(send=send))
+        self.assertTrue(await out.tick())
+        notice = send.call_args.args[1]["text"]
+        self.assertIn("微信连接窗口", notice)
+
+        directory = self.store.directory
+        self.store.close()
+        self.store = NativeStore(directory, clock=lambda: self.now)
+        self.addCleanup(self.store.close)
+        self.receive(111, "Which reminder?", {"svr_id": str(receipt_id)})
+        incoming = Incoming(self.store, self.dot, self.binding, 86400)
+        await incoming.tick(self.read)
+        text, _, files, target = self.posts[-1]
+        self.assertEqual(text, "Which reminder?\n\n[微信引用 · 此前回复] " + notice)
+        self.assertIsNone(target)
+        self.assertEqual(files, [])
+
+    async def test_notice_reference_keeps_only_scoped_excerpt_after_acceptance(self):
+        self.receive(120, "Initial context")
+        await self.incoming.tick(self.read)
+        body = "Sample notice. " * 100
+        send = Mock(side_effect=[{"ret": 0, "message_id": 601}, {"ret": 1, "message_id": 602}])
+        out = Outgoing(self.store, self.dot, self.binding, client=SimpleNamespace(send=send))
+        for number in (1, 2):
+            self.store.notice(f"summary:{number}", body)
+            self.assertTrue(await out.tick())
+        rows = self.store.db.execute(
+            "SELECT account,peer,source_id,text,attachment_id FROM sent_quote_cache"
+        ).fetchall()
+        self.assertEqual(list(map(tuple, rows)), [("wx", "owner", "601", body[:63] + "…", None)])
+        self.store.db.execute("UPDATE sent_quote_cache SET peer='other'")
+        self.receive(121, "Which reminder?", {"svr_id": 601})
+        await self.incoming.tick(self.read)
+        self.assertEqual(self.posts[-1][0], "Which reminder?\n\n[微信引用] 原消息未能定位")
+
+    async def test_unavailable_notice_cache_keeps_accepted_send(self):
+        self.receive(130, "Initial context")
+        self.store.notice("summary:sample", "Sample notice")
+        self.store.db.execute("""CREATE TEMP TRIGGER unavailable BEFORE INSERT ON sent_quote_cache
+                                 BEGIN SELECT RAISE(FAIL,'unavailable'); END""")
+        send = Mock(return_value={"ret": 0, "message_id": 603})
+        out = Outgoing(self.store, self.dot, self.binding, client=SimpleNamespace(send=send))
+        self.assertTrue(await out.tick())
+        self.assertFalse(await out.tick())
+        self.assertEqual(self.store.status()["outbox"], {"accepted": 1})
+        send.assert_called_once()
 
     async def test_conflicting_validation_receipt_stays_in_verification(self):
         self.receive(801, "The original message")

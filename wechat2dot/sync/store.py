@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -253,21 +254,31 @@ class NativeStore(Store):
         sid = reference_id(response.get("message_id"))
         if not sid:
             return
-        try:
-            ident(source)
-        except DotError:
-            return
         attachment = reply.get("attachment")
         preview = (
             compact_attachment_quote(attachment["kind"], attachment["name"])
             if attachment
             else compact_quote_text(reply.get("text"))
         )
-        self.db.execute(
-            """INSERT OR IGNORE INTO native_sent_refs
-               SELECT ?,?,?,id,? FROM native_seen WHERE id=?""",
-            (binding["id"], binding["owner"], sid, preview, source),
-        )
+        scope = (binding["id"], binding["owner"], sid)
+        try:
+            if source is None:
+                # A bridge notice has a WeChat receipt but no matching DOT room message.
+                if preview:
+                    self.db.execute(
+                        """INSERT OR IGNORE INTO sent_quote_cache
+                           (account,peer,source_id,text,attachment_id) VALUES(?,?,?,?,NULL)""",
+                        (*scope, preview),
+                    )
+            else:
+                self.db.execute(
+                    """INSERT OR IGNORE INTO native_sent_refs
+                       SELECT ?,?,?,id,? FROM native_seen WHERE id=?""",
+                    (*scope, preview, ident(source)),
+                )
+        except (DotError, sqlite3.IntegrityError):
+            # Optional reference metadata must not roll back a confirmed send.
+            return
 
     def prune_sent_references(self, retention):
         self.db.execute(
