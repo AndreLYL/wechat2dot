@@ -2,6 +2,12 @@
 
 Use your own WeChat conversation as a second client for your primary DOT room. A reply started on your phone, a follow-up on your Mac and a scheduled update written to that room all enter the same delivery queue. A message you send from WeChat appears in that room under your account.
 
+## Community
+
+Join the AI Native WeChat community to exchange ideas about wechat2dot, Personal Agents, MCP integrations and AI automation, and collaborate on open-source projects.
+
+[Join the WeChat group (current QR code and expiration date)](COMMUNITY.md) · [Report bugs or suggest features](https://github.com/AndreLYL/wechat2dot/issues)
+
 ## Install the 2.0.0a2 prerelease
 
 Install with `curl -fsSL https://raw.githubusercontent.com/AndreLYL/wechat2dot/main/install.sh | sh` on macOS/Linux. The installer fetches the versioned wheel from GitHub Releases. From a checkout containing the native bridge, run `sh ./install.sh` on macOS/Linux or `.\install.ps1` in Windows PowerShell. With uv installed, `uv run --frozen wechat2dot setup` also works.
